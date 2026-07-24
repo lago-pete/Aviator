@@ -1,0 +1,104 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <vector>
+
+void get_heading(uint8_t xh, uint8_t xl, uint8_t yh, uint8_t yl);
+struct AccelData
+{
+  uint8_t xl; // 0x03 X-axis, low byte
+  uint8_t xh; // 0x04 X-axis, high byte
+  uint8_t yl; // 0x05 Y-axis, low byte
+  uint8_t yh; // 0x06 Y-axis, high byte
+  uint8_t zl; // 0x07 Z-axis, low byte
+  uint8_t zh; // 0x08 Z-axis, high byte
+};
+
+void setup()
+{
+  Serial.begin(115200); // This is setting up the channel between the Chips using UART, the number is the BAUD rate
+  Wire.begin(21, 22);   // This is the pin location on the ESP32 (pin 21,22) that corrispond with the SDA and SCL
+  Serial.print("Connecting... :)\n\n");
+}
+
+void loop()
+{
+  Wire.beginTransmission(0x0E); // I2C slave address of the IST8310 magnetometer (its fixed default address)
+  Wire.write(0x0A); // CNTL1 register - mode control register on the IST8310
+  Wire.write(0x01); // Value written to CNTL1: single measurement mode (takes one reading, then returns to standby)
+  Wire.endTransmission();
+
+
+  Wire.beginTransmission(0x0E); // Re-address the IST8310 to point it at a register before reading
+  Wire.write(0x02); // STAT1 (status 1) register - bit 0 is DRDY, set high once a fresh measurement is ready
+  Wire.endTransmission(false);
+
+  Wire.requestFrom(0x0E, 1); // Read 1 byte back from the IST8310 (the STAT1 register value)
+  int ans = Wire.read();
+  while((ans & 0x01) != 1){
+    Wire.requestFrom(0x0E, 1); // Keep polling the IST8310 until DRDY (bit 0 of STAT1) is set
+    ans = Wire.read();
+  }
+
+  Wire.beginTransmission(0x0E); // Re-address the IST8310 again, this time to read the measurement data
+  Wire.write(0x3); // DATAXL register - start of the 6-byte X/Y/Z measurement block (DATAXL, DATAXH, DATAYL, DATAYH, DATAZL, DATAZH)
+  Wire.endTransmission(false);
+
+  Wire.requestFrom(0x0E, 6); // Burst-read all 6 data bytes (X low/high, Y low/high, Z low/high) starting at DATAXL (0x03)
+  AccelData data;
+  data.xl = Wire.read();
+  data.xh = Wire.read();
+  data.yl = Wire.read();
+  data.yh = Wire.read();
+  data.zl = Wire.read();
+  data.zh = Wire.read();
+
+  Serial.print("X: "); Serial.print(data.xl); Serial.print(" "); Serial.println(data.xh);
+  Serial.print("Y: "); Serial.print(data.yl); Serial.print(" "); Serial.println(data.yh);
+  Serial.print("Z: "); Serial.print(data.zl); Serial.print(" "); Serial.println(data.zh);
+
+
+  get_heading(data.xh, data.xl, data.yh, data.yl);
+
+  delay(3000);
+
+}
+
+
+
+void get_heading(uint8_t xh, uint8_t xl, uint8_t yh, uint8_t yl){
+  // take high and low unsigned 8bits, convert them into unsigned 16bit, this allows for the Or operation of combinding
+    uint16_t combine_x = static_cast<uint16_t>( xh << 8 | xl); 
+    uint16_t combine_y = static_cast<uint16_t>( yh << 8 | yl); 
+
+  // take full 16bit messages and convert them into signed 16bit, we do this roundabout way because the OR operation doesnt work on signed bits so we must convert to unsigned first. 
+    int16_t sign_x = static_cast<int16_t>(combine_x);
+    int16_t sign_y = static_cast<int16_t>(combine_y);
+
+
+    //convert into readable values uT/LSB
+    float pos_x = sign_x * .3f;
+    float pos_y = sign_y * .3f;
+
+    //Now that we have proper readings from the device we can do Math to figure out the Heading
+    // Get heading in rad
+    float heading_rad = atan2(-pos_y,-pos_x); // originally had pos_y and pos_x, however, after testing I was getting inverted readings meaning the actual chip is most likely inverted on the board, no big deal.
+
+    // convert into degrees and then output the calc
+    // Convert Rad into Deg by D = R * 180/pi
+    float heading_deg = heading_rad * 180.0f/M_PI;
+    if(heading_deg < 0.0f){
+      heading_deg += 360.0f;
+    }
+
+    //Print calc
+    Serial.println();
+    Serial.println();
+    Serial.print("The Current Heading is: ");
+    Serial.println(heading_deg);
+
+
+
+    //Give time to look at results
+    delay(3000);
+
+}
