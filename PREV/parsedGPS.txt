@@ -58,10 +58,39 @@ void loop()
         Serial.println(sentence);
         display(sentence);
       }
+
+
+
+
+      /// CheckSum Equation
+      int indexCheck = sentence.indexOf('*');
+      if (indexCheck != -1)
+      {
+        String checkSum = sentence.substring(1, indexCheck);
+        uint8_t temp = 0;
+        for (int i = 0; i < checkSum.length(); i++)
+        {
+          temp ^= checkSum.charAt(i);
+        }
+
+        String expectedStr = sentence.substring(indexCheck + 1);
+        expectedStr.trim();
+        uint8_t expected = (uint8_t)strtol(expectedStr.c_str(), NULL, 16);
+
+        if (temp != expected)
+        {
+          Serial.printf("Checksum mismatch: calc=%02X expected=%02X sentence=%s\n", temp, expected, sentence.c_str());
+        }
+      }
+
+
+
+
+
     }
   }
 }
-//                                                      x      *Time    *lat     *LD    *Lon   *LD* *  *HDOP  *Alt x  x   x   x
+//                                                      x      *Time    *lat     *LD    *Lon   *LD* *  *HDOP  *Alt x  x   x   x     This last variable is the checksum for the sentence
 // indexOF(), substring(start,end)                    $GNGGA,214046.00,3318.85071,N,11153.50896,W,1,10,1.12,366.8,M,-27.9,M,,*7B
 void display(String s)
 {
