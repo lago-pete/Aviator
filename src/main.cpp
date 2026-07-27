@@ -2,143 +2,28 @@
 #include <Wire.h>
 #include <vector>
 
-struct GpsTime
-{
-  int hour;
-  int minute;
-  float sec;
-};
 
-struct Reading
-{
-  double lat;
-  double lon;
-  char latDir;
-  char lonDir;
-  int fixQual;
-  int satCount;
-  float hdop;
-  float altitude;
-  GpsTime time;
-};
-
-void display(String s);
 
 void setup()
 {
   Serial.begin(115200);
-  Serial2.begin(38400, SERIAL_8N1, 16, 17); // Testing this baud first because datasheets have been all over the place.
+  Wire.begin(21,22); 
   Serial.println("Connecting....");
+
+  for(int i = 1; i < 127; i++){
+    Wire.beginTransmission(i);
+    int check = Wire.endTransmission();
+    if(check == 0){
+      Serial.print("Connected at:");
+      Serial.println(i,HEX);
+    }
+
+  }
+
 }
 
 void loop()
 {
-  while (Serial2.available() > 0)
-  {
-    int ans = Serial2.read();
-    if (ans == '$')
-    {
-      String sentence = "$";
-      while (ans != '\n')
-      {
-        if (Serial2.available() > 0)
-        {
-          ans = Serial2.read();
-          if (ans != '\n')
-          {
-            sentence += (char)ans;
-          }
-        }
-      }
-
-      int index = sentence.indexOf(',');
-      String check = sentence.substring(0, index);
-      if (check == "$GNGGA")
-      {
-        Serial.println(sentence);
-        display(sentence);
-      }
-
-
-
-
-      /// CheckSum Equation
-      int indexCheck = sentence.indexOf('*');
-      if (indexCheck != -1)
-      {
-        String checkSum = sentence.substring(1, indexCheck);
-        uint8_t temp = 0;
-        for (int i = 0; i < checkSum.length(); i++)
-        {
-          temp ^= checkSum.charAt(i);
-        }
-
-        String expectedStr = sentence.substring(indexCheck + 1);
-        expectedStr.trim();
-        uint8_t expected = (uint8_t)strtol(expectedStr.c_str(), NULL, 16);
-
-        if (temp != expected)
-        {
-          Serial.printf("Checksum mismatch: calc=%02X expected=%02X sentence=%s\n", temp, expected, sentence.c_str());
-        }
-      }
-
-
-
-
-
-    }
-  }
-}
-//                                                      x      *Time    *lat     *LD    *Lon   *LD* *  *HDOP  *Alt x  x   x   x     This last variable is the checksum for the sentence
-// indexOF(), substring(start,end)                    $GNGGA,214046.00,3318.85071,N,11153.50896,W,1,10,1.12,366.8,M,-27.9,M,,*7B
-void display(String s)
-{
-  Reading temp;
-  int indexS = 0;
-  int indexE = 0;
-
-  indexS = s.indexOf(',') + 1;
-  indexE = s.indexOf(',', indexS);
-  String tempTime = s.substring(indexS, indexE);
-  temp.time.hour = tempTime.substring(0, 2).toInt();
-  temp.time.minute = tempTime.substring(2, 4).toInt();
-  temp.time.sec = tempTime.substring(4).toFloat();
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.lat = s.substring(indexS, indexE).toDouble();
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.latDir = s.substring(indexS, indexE).charAt(0);
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.lon = s.substring(indexS, indexE).toDouble();
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.lonDir = s.substring(indexS, indexE).charAt(0);
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.fixQual = s.substring(indexS, indexE).toInt();
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.satCount = s.substring(indexS, indexE).toInt();
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.hdop = s.substring(indexS, indexE).toFloat();
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.altitude = s.substring(indexS, indexE).toFloat();
-
-  Serial.printf("Time: %02d:%02d:%05.2f  Lat: %.5f %c  Lon: %.5f %c  Fix: %d  Sats: %d  HDOP: %.2f  Alt: %.1fm\n",
-                temp.time.hour, temp.time.minute, temp.time.sec,
-                temp.lat, temp.latDir, temp.lon, temp.lonDir,
-                temp.fixQual, temp.satCount, temp.hdop, temp.altitude);
+  
+      
 }
