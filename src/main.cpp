@@ -2,6 +2,22 @@
 #include <Wire.h>
 #include <vector>
 
+struct Readings
+{
+  uint8_t pressMSB;  // 0x1F
+  uint8_t pressLSB;  // 0x20
+  uint8_t pressXLSB; // 0x21<7:4>
+  int32_t pressFinal;
+
+  uint8_t tempMSB;  // 0x22
+  uint8_t tempLSB;  // 0x23
+  uint8_t tempXLSB; // 0x24<7:4>
+  int32_t tempFinal;
+
+  uint8_t humMSB; // 0x25
+  uint8_t humLSB; // 0x26
+  int16_t humFinal;
+} finalRead;
 struct Temp
 {
   uint16_t par_t1;
@@ -61,16 +77,17 @@ void setup()
   // 100	0x4	x8 oversampling
   // 101	0x5	x16 oversampling (most samples, slowest, most accurate)
   // 110, 111	0x6, 0x7	Reserved/undefined — don't use
-  uint8_t tempOS = 0x03; //x4
-  uint8_t pressOS = 0x03; //x4
-  uint8_t humOS = 0x01; //x1
-  uint8_t mode = 0x01; // wake
+  // These oversamplings take multiple readings and then get the average and then place it in the normal registry to pick up. So we dont do any of the calculation over here.
+  uint8_t tempOS = 0x03;  // x4
+  uint8_t pressOS = 0x03; // x4
+  uint8_t humOS = 0x01;   // x1
+  uint8_t mode = 0x01;    // wake
   uint8_t meas = tempOS << 5 | pressOS << 2 | mode;
 
   // Ctrl_Hum
   Wire.beginTransmission(0x77);
   Wire.write(0x72);
-  Wire.write(humOS); // This is the input for the Ctrl_hum with byte = unused | osrs_h 
+  Wire.write(humOS); // This is the input for the Ctrl_hum with byte = unused | osrs_h
   Wire.endTransmission();
 
   // Ctrl_meas
@@ -174,6 +191,76 @@ void setup()
   uint8_t range = Wire.read();
   range = (range & 0x30) >> 4;
   gasHeat.res_heat_range = range;
+
+  // This is the measurements from the ctrl calls
+  //  First we check in eas_status_0 if the data is ready to pull;
+  Wire.beginTransmission(0x77);
+  Wire.write(0x1D);
+  Wire.endTransmission(false);
+
+  Wire.requestFrom(0x77, 1);
+  while ((Wire.read() & 0x20) != 0x20)
+  {
+    Wire.beginTransmission(0x77);
+    Wire.write(0x1D);
+    Wire.endTransmission(false);
+    Wire.requestFrom(0x77, 1);
+  }
+
+
+
+  // PressureMSB
+  Wire.beginTransmission(0x77);
+  Wire.write(0x1F);
+  Wire.endTransmission(false);
+  Wire.requestFrom(0x77, 1);
+  finalRead.pressMSB = Wire.read();
+  
+ // PressureLSB+XLSB
+  Wire.beginTransmission(0x77);
+  Wire.write(0x20);
+  Wire.endTransmission(false);
+  Wire.requestFrom(0x77, 2);
+  finalRead.pressLSB = Wire.read();
+  uint8_t temp1 = Wire.read();
+  finalRead.pressXLSB = (temp1 & 0xF0) >> 4;
+  uint32_t temp2 = (uint32_t) finalRead.pressMSB << 12 | finalRead.pressLSB << 4 | finalRead.pressXLSB;
+  finalRead.pressFinal = (int32_t) temp2;
+
+
+
+  // Temp MSB + LSB + XLSB
+  Wire.beginTransmission(0x77);
+  Wire.write(0x22);
+  Wire.endTransmission(false);
+  Wire.requestFrom(0x77, 3);
+  finalRead.tempMSB = Wire.read();
+  finalRead.tempLSB = Wire.read();
+  uint8_t temp3 = Wire.read();
+  finalRead.tempXLSB = (temp3 & 0xF0) >> 4;
+  uint32_t temp4 = (uint32_t) finalRead.tempMSB << 12 | finalRead.tempLSB << 4 | finalRead.tempXLSB;
+  finalRead.tempFinal = (int32_t) temp4;
+
+
+  //Hum MSB + LSB
+  Wire.beginTransmission(0x77);
+  Wire.write(0x25);
+  Wire.endTransmission(false);
+  Wire.requestFrom(0x77, 2);
+  finalRead.humMSB = Wire.read();
+  finalRead.humLSB = Wire.read();
+  uint16_t temp5 = (uint16_t) finalRead.humMSB << 8 | finalRead.humLSB;
+  finalRead.humFinal = (int16_t) temp5;
+
+
+
+
+
+
+
+
+
+
 }
 
 void loop()
