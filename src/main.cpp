@@ -2,6 +2,18 @@
 #include <Wire.h>
 #include <vector>
 
+
+
+struct TempCalc{
+  int32_t var1,var2,var3,t_fine, temp_comp;
+}tempCalc;
+struct PressCalc{
+  int32_t var1,var2,var3;
+  uint32_t press_comp;
+}pressCalc;
+struct HumCalc{
+  int32_t var1,var2,var3,var4,var5,var6,temp_scaled,hum_comp;
+}humCalc;
 struct Readings
 {
   uint8_t pressMSB;  // 0x1F
@@ -66,6 +78,8 @@ void setup()
   Serial.begin(115200);
   Wire.begin(21, 22);
   Serial.println("Connecting....");
+  
+
 
   uint8_t buffer1[25];
   uint8_t buffer2[16];
@@ -83,6 +97,7 @@ void setup()
   uint8_t humOS = 0x01;   // x1
   uint8_t mode = 0x01;    // wake
   uint8_t meas = tempOS << 5 | pressOS << 2 | mode;
+
 
   // Ctrl_Hum
   Wire.beginTransmission(0x77);
@@ -199,7 +214,7 @@ void setup()
   Wire.endTransmission(false);
 
   Wire.requestFrom(0x77, 1);
-  while ((Wire.read() & 0x20) != 0x20)
+  while ((Wire.read() & 0x80) != 0x80)
   {
     Wire.beginTransmission(0x77);
     Wire.write(0x1D);
@@ -253,11 +268,63 @@ void setup()
   finalRead.humFinal = (int16_t) temp5;
 
 
+// Temp Formula
+tempCalc.var1 = (finalRead.tempFinal >> 3) - (temp.par_t1 << 1);
+tempCalc.var2 = (tempCalc.var1 * temp.par_t2) >> 11;
+tempCalc.var3 = ((tempCalc.var1 >> 1) * (tempCalc.var1 >> 1)) >> 12;
+tempCalc.var3 = (tempCalc.var3 * (temp.par_t3 << 4)) >> 14;
+tempCalc.t_fine = tempCalc.var2 + tempCalc.var3;
+tempCalc.temp_comp = ((tempCalc.t_fine * 5) + 128) >> 8;
+
+//Pressure Formula // I had Claude Implement this formula lmao
+
+pressCalc.var1 = ((int32_t)tempCalc.t_fine >> 1) - 64000;
+pressCalc.var2 = ((((pressCalc.var1 >> 2) * (pressCalc.var1 >> 2)) >> 11) * (int32_t)pressure.par_p6) >> 2;
+pressCalc.var2 = pressCalc.var2 + ((pressCalc.var1 * (int32_t)pressure.par_p5) << 1);
+pressCalc.var2 = (pressCalc.var2 >> 2) + ((int32_t)pressure.par_p4 << 16);
+pressCalc.var1 = (((((pressCalc.var1 >> 2) * (pressCalc.var1 >> 2)) >> 13) * ((int32_t)pressure.par_p3 << 5)) >> 3) + (((int32_t)pressure.par_p2 * pressCalc.var1) >> 1);
+pressCalc.var1 = pressCalc.var1 >> 18;
+pressCalc.var1 = ((32768 + pressCalc.var1) * (int32_t)pressure.par_p1) >> 15;
+
+pressCalc.press_comp = 1048576 - finalRead.pressFinal;
+pressCalc.press_comp = (uint32_t)((pressCalc.press_comp - (pressCalc.var2 >> 12)) * (uint32_t)3125);
+
+if (pressCalc.press_comp >= (1 << 30))
+    pressCalc.press_comp = ((pressCalc.press_comp / (uint32_t)pressCalc.var1) << 1);
+else
+    pressCalc.press_comp = ((pressCalc.press_comp << 1) / (uint32_t)pressCalc.var1);
+
+pressCalc.var1 = ((int32_t)pressure.par_p9 * (int32_t)(((pressCalc.press_comp >> 3) * (pressCalc.press_comp >> 3)) >> 13)) >> 12;
+pressCalc.var2 = ((int32_t)(pressCalc.press_comp >> 2) * (int32_t)pressure.par_p8) >> 13;
+pressCalc.var3 = ((int32_t)(pressCalc.press_comp >> 8) * (int32_t)(pressCalc.press_comp >> 8) * (int32_t)(pressCalc.press_comp >> 8) * (int32_t)pressure.par_p10) >> 17;
+
+pressCalc.press_comp = (int32_t)(pressCalc.press_comp) + ((pressCalc.var1 + pressCalc.var2 + pressCalc.var3 + ((int32_t)pressure.par_p7 << 7)) >> 4);
+
+//Humidity Formula
+
+humCalc.temp_scaled = (int32_t)tempCalc.temp_comp;
+
+humCalc.var1 = (int32_t)finalRead.humFinal - ((int32_t)humididty.par_h1 << 4) - (((humCalc.temp_scaled * (int32_t)humididty.par_h3) / 100) >> 1);
+
+humCalc.var2 = ((int32_t)humididty.par_h2 * (((humCalc.temp_scaled * (int32_t)humididty.par_h4) / 100) +
+        (((humCalc.temp_scaled * ((humCalc.temp_scaled * (int32_t)humididty.par_h5) / 100)) >> 6) / 100) +
+        (int32_t)(1 << 14))) >> 10;
+
+humCalc.var3 = humCalc.var1 * humCalc.var2;
+
+humCalc.var4 = (((int32_t)humididty.par_h6 << 7) + ((humCalc.temp_scaled * (int32_t)humididty.par_h7) / 100)) >> 4;
+
+humCalc.var5 = ((humCalc.var3 >> 14) * (humCalc.var3 >> 14)) >> 10;
+
+humCalc.var6 = (humCalc.var4 * humCalc.var5) >> 1;
+
+humCalc.hum_comp = (((humCalc.var3 + humCalc.var6) >> 10) * (int32_t)1000) >> 12;
 
 
 
-
-
+Serial.println(tempCalc.temp_comp/100);
+Serial.println(pressCalc.press_comp/100);
+Serial.println(humCalc.hum_comp/1000);
 
 
 
