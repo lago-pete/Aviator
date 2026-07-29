@@ -1,154 +1,462 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <vector>
+
+// ---------------------------------------------------------------------------
+// Sensor data structs — one "latest known good reading" per sensor.
+// valid is false whenever the most recent read attempt failed, so callers
+// can skip stale data instead of acting on it.
+// ---------------------------------------------------------------------------
 
 struct MpuData
 {
-  int16_t accelX;
-  int16_t accelY;
-  int16_t accelZ;
-  int16_t temp;
-  int16_t gyroX;
-  int16_t gyroY;
-  int16_t gyroZ;
-} mpuData;
+  int16_t accelX = 0, accelY = 0, accelZ = 0;
+  int16_t temp = 0;
+  int16_t gyroX = 0, gyroY = 0, gyroZ = 0;
+  bool valid = false;
+};
 
-const float accelConst = 16384;
-const float gyroConst = 131;
-const float tempConst = 340;
-
-int16_t combine(uint8_t h, uint8_t l);
-
-float toUnits(int16_t x, float constant);
-
-void setup()
+struct BmeData
 {
-  Serial.begin(115200); // This is setting up the channel between the Chips using UART, the number is the BAUD rate
-  Wire.begin(21, 22);   // This is the pin location on the ESP32 (pin 21,22) that corrispond with the SDA and SCL on the MPU Chip
-  Serial.print("Connecting... :)\n\n");
+  float temperature = 0;
+  float humidity = 0;
+  float pressure = 0;
+  float gasResistance = 0; // TODO: heater/gas-measurement sequence not implemented — no proven reference for this board
+  bool valid = false;
+};
 
-  Wire.beginTransmission(0x68);
-  Wire.write(0x6b);
-  Wire.write(0x01);
-  int check = Wire.endTransmission();
+struct CompassData
+{
+  float headingDegrees = 0;
+  int16_t rawX = 0, rawY = 0, rawZ = 0;
+  bool valid = false;
+};
 
-  if (check != 0)
+MpuData mpuData;
+BmeData bmeData;
+CompassData compassData;
+
+// ---------------------------------------------------------------------------
+// MPU-6050 (accel/gyro/temp)
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t MPU_ADDR = 0x68;
+constexpr uint8_t MPU_PWR_MGMT_1 = 0x6B;
+constexpr uint8_t MPU_DATA_START = 0x3B;
+constexpr float ACCEL_CONST = 16384.0f;
+constexpr float GYRO_CONST = 131.0f;
+constexpr float TEMP_CONST = 340.0f;
+constexpr float TEMP_OFFSET = 36.53f; // MPU6050 datasheet offset
+
+int16_t combine(uint8_t h, uint8_t l)
+{
+  uint16_t temp = (uint16_t)((h << 8) | l);
+  return (int16_t)temp;
+}
+
+float toUnits(int16_t x, float constant)
+{
+  return x / constant;
+}
+
+void readMpu(MpuData &data)
+{
+  data.valid = false; // assume failure until proven otherwise
+
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(MPU_DATA_START);
+  Wire.endTransmission(false);
+
+  int received = Wire.requestFrom((int)MPU_ADDR, 14);
+  if (received != 14)
   {
-    Serial.print("Error Recieving transmission!");
+    return; // data.valid stays false, bail out early
+  }
+
+  int16_t values[7];
+  for (int i = 0; i < 7; i++)
+  {
+    uint8_t highByte = Wire.read();
+    uint8_t lowByte = Wire.read();
+    values[i] = combine(highByte, lowByte);
+  }
+
+  data.accelX = values[0];
+  data.accelY = values[1];
+  data.accelZ = values[2];
+  data.temp = values[3];
+  data.gyroX = values[4];
+  data.gyroY = values[5];
+  data.gyroZ = values[6];
+  data.valid = true;
+}
+
+// ---------------------------------------------------------------------------
+// IST8310 compass
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t COMPASS_ADDR = 0x0E;
+constexpr uint8_t COMPASS_CNTL1 = 0x0A;
+constexpr uint8_t COMPASS_STAT1 = 0x02;
+constexpr uint8_t COMPASS_DATA_START = 0x03;
+constexpr float COMPASS_UT_PER_LSB = 0.3f;
+constexpr unsigned long COMPASS_TIMEOUT_MS = 50;
+
+void readCompass(CompassData &data)
+{
+  data.valid = false;
+
+  // Single-measurement mode — the IST8310 auto-reverts to standby after one
+  // reading, so this has to be written every call.
+  Wire.beginTransmission(COMPASS_ADDR);
+  Wire.write(COMPASS_CNTL1);
+  Wire.write(0x01);
+  Wire.endTransmission();
+
+  Wire.beginTransmission(COMPASS_ADDR);
+  Wire.write(COMPASS_STAT1);
+  Wire.endTransmission(false);
+
+  unsigned long start = millis();
+  uint8_t status;
+  do
+  {
+    Wire.requestFrom((int)COMPASS_ADDR, 1);
+    status = Wire.read();
+    if (status & 0x01)
+    {
+      break; // DRDY set
+    }
+    if (millis() - start > COMPASS_TIMEOUT_MS)
+    {
+      return; // timed out waiting for DRDY
+    }
+  } while (true);
+
+  Wire.beginTransmission(COMPASS_ADDR);
+  Wire.write(COMPASS_DATA_START);
+  Wire.endTransmission(false);
+
+  Wire.requestFrom((int)COMPASS_ADDR, 6);
+  uint8_t xl = Wire.read();
+  uint8_t xh = Wire.read();
+  uint8_t yl = Wire.read();
+  uint8_t yh = Wire.read();
+  uint8_t zl = Wire.read();
+  uint8_t zh = Wire.read();
+
+  data.rawX = combine(xh, xl);
+  data.rawY = combine(yh, yl);
+  data.rawZ = combine(zh, zl);
+
+  float pos_x = data.rawX * COMPASS_UT_PER_LSB;
+  float pos_y = data.rawY * COMPASS_UT_PER_LSB;
+
+  // Sign flipped on both axes — the chip is mounted inverted on the board.
+  float heading_rad = atan2(-pos_y, -pos_x);
+  float heading_deg = heading_rad * 180.0f / M_PI;
+  if (heading_deg < 0.0f)
+  {
+    heading_deg += 360.0f;
+  }
+
+  data.headingDegrees = heading_deg;
+  data.valid = true;
+}
+
+// ---------------------------------------------------------------------------
+// BME680 (temp/pressure/humidity)
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t BME_ADDR = 0x77;
+constexpr uint8_t BME_CTRL_HUM = 0x72;
+constexpr uint8_t BME_CTRL_MEAS = 0x74;
+constexpr uint8_t BME_STATUS = 0x1D;
+constexpr uint8_t BME_PRESS_MSB = 0x1F;
+constexpr uint8_t BME_TEMP_MSB = 0x22;
+constexpr uint8_t BME_HUM_MSB = 0x25;
+constexpr uint8_t BME_CALIB_BLOCK1 = 0x89; // 25 bytes
+constexpr uint8_t BME_CALIB_BLOCK2 = 0xE1; // 16 bytes
+constexpr unsigned long BME_TIMEOUT_MS = 100;
+
+constexpr uint8_t BME_TEMP_OS = 0x03;  // x4 oversampling
+constexpr uint8_t BME_PRESS_OS = 0x03; // x4 oversampling
+constexpr uint8_t BME_HUM_OS = 0x01;   // x1 oversampling
+
+struct BmeCalibTemp
+{
+  uint16_t par_t1;
+  int16_t par_t2;
+  int8_t par_t3;
+} bmeCalibTemp;
+
+struct BmeCalibPressure
+{
+  uint16_t par_p1;
+  int16_t par_p2;
+  int8_t par_p3;
+  int16_t par_p4;
+  int16_t par_p5;
+  int8_t par_p6;
+  int8_t par_p7;
+  int16_t par_p8;
+  int16_t par_p9;
+  uint8_t par_p10;
+} bmeCalibPressure;
+
+struct BmeCalibHumidity
+{
+  uint16_t par_h1;
+  uint16_t par_h2;
+  int8_t par_h3;
+  int8_t par_h4;
+  int8_t par_h5;
+  uint8_t par_h6;
+  int8_t par_h7;
+} bmeCalibHumidity;
+
+// One-time: set oversampling and pull the factory calibration trim values.
+void readBmeCalibration()
+{
+  uint8_t buffer1[25];
+  uint8_t buffer2[16];
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_CTRL_HUM);
+  Wire.write(BME_HUM_OS);
+  Wire.endTransmission();
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_CALIB_BLOCK1);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)BME_ADDR, 25);
+  for (int i = 0; i < 25; i++)
+  {
+    buffer1[i] = Wire.read();
+  }
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_CALIB_BLOCK2);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)BME_ADDR, 16);
+  for (int i = 0; i < 16; i++)
+  {
+    buffer2[i] = Wire.read();
+  }
+
+  bmeCalibTemp.par_t1 = (uint16_t)((buffer2[9] << 8) | buffer2[8]);
+  bmeCalibTemp.par_t2 = (int16_t)((buffer1[2] << 8) | buffer1[1]);
+  bmeCalibTemp.par_t3 = (int8_t)buffer1[3];
+
+  bmeCalibPressure.par_p1 = (uint16_t)((buffer1[6] << 8) | buffer1[5]);
+  bmeCalibPressure.par_p2 = (int16_t)((buffer1[8] << 8) | buffer1[7]);
+  bmeCalibPressure.par_p3 = (int8_t)buffer1[9];
+  bmeCalibPressure.par_p4 = (int16_t)((buffer1[12] << 8) | buffer1[11]);
+  bmeCalibPressure.par_p5 = (int16_t)((buffer1[14] << 8) | buffer1[13]);
+  bmeCalibPressure.par_p7 = (int8_t)buffer1[15];
+  bmeCalibPressure.par_p6 = (int8_t)buffer1[16];
+  bmeCalibPressure.par_p8 = (int16_t)((buffer1[20] << 8) | buffer1[19]);
+  bmeCalibPressure.par_p9 = (int16_t)((buffer1[22] << 8) | buffer1[21]);
+  bmeCalibPressure.par_p10 = buffer1[23];
+
+  bmeCalibHumidity.par_h3 = (int8_t)buffer2[3];
+  bmeCalibHumidity.par_h4 = (int8_t)buffer2[4];
+  bmeCalibHumidity.par_h5 = (int8_t)buffer2[5];
+  bmeCalibHumidity.par_h6 = buffer2[6];
+  bmeCalibHumidity.par_h7 = (int8_t)buffer2[7];
+  bmeCalibHumidity.par_h1 = (uint16_t)((buffer2[2] << 4) | (buffer2[1] & 0x0F));
+  bmeCalibHumidity.par_h2 = (uint16_t)((buffer2[0] << 4) | ((buffer2[1] & 0xF0) >> 4));
+}
+
+void readBme(BmeData &data)
+{
+  data.valid = false;
+
+  // Forced mode: takes one measurement using the configured oversampling,
+  // then the sensor reverts to sleep on its own.
+  uint8_t meas = (BME_TEMP_OS << 5) | (BME_PRESS_OS << 2) | 0x01;
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_CTRL_MEAS);
+  Wire.write(meas);
+  Wire.endTransmission();
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_STATUS);
+  Wire.endTransmission(false);
+
+  unsigned long start = millis();
+  uint8_t status;
+  do
+  {
+    Wire.requestFrom((int)BME_ADDR, 1);
+    status = Wire.read();
+    if (status & 0x80)
+    {
+      break; // new_data_0 set
+    }
+    if (millis() - start > BME_TIMEOUT_MS)
+    {
+      return; // timed out waiting for the measurement
+    }
+  } while (true);
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_PRESS_MSB);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)BME_ADDR, 3);
+  uint8_t pressMSB = Wire.read();
+  uint8_t pressLSB = Wire.read();
+  uint8_t pressXLSB = (Wire.read() & 0xF0) >> 4;
+  int32_t pressRaw = (int32_t)(((uint32_t)pressMSB << 12) | ((uint32_t)pressLSB << 4) | pressXLSB);
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_TEMP_MSB);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)BME_ADDR, 3);
+  uint8_t tempMSB = Wire.read();
+  uint8_t tempLSB = Wire.read();
+  uint8_t tempXLSB = (Wire.read() & 0xF0) >> 4;
+  int32_t tempRaw = (int32_t)(((uint32_t)tempMSB << 12) | ((uint32_t)tempLSB << 4) | tempXLSB);
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_HUM_MSB);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)BME_ADDR, 2);
+  uint8_t humMSB = Wire.read();
+  uint8_t humLSB = Wire.read();
+  int16_t humRaw = (int16_t)(((uint16_t)humMSB << 8) | humLSB);
+
+  // --- Compensation formulas (Bosch BME680 datasheet) ---
+
+  int32_t tVar1 = (tempRaw >> 3) - ((int32_t)bmeCalibTemp.par_t1 << 1);
+  int32_t tVar2 = (tVar1 * bmeCalibTemp.par_t2) >> 11;
+  int32_t tVar3 = ((tVar1 >> 1) * (tVar1 >> 1)) >> 12;
+  tVar3 = (tVar3 * ((int32_t)bmeCalibTemp.par_t3 << 4)) >> 14;
+  int32_t tFine = tVar2 + tVar3;
+  int32_t tempComp = ((tFine * 5) + 128) >> 8;
+
+  int32_t pVar1 = ((int32_t)tFine >> 1) - 64000;
+  int32_t pVar2 = (((pVar1 >> 2) * (pVar1 >> 2)) >> 11) * (int32_t)bmeCalibPressure.par_p6;
+  pVar2 = pVar2 + ((pVar1 * (int32_t)bmeCalibPressure.par_p5) << 1);
+  pVar2 = (pVar2 >> 2) + ((int32_t)bmeCalibPressure.par_p4 << 16);
+  pVar1 = (((((pVar1 >> 2) * (pVar1 >> 2)) >> 13) * ((int32_t)bmeCalibPressure.par_p3 << 5)) >> 3) +
+          (((int32_t)bmeCalibPressure.par_p2 * pVar1) >> 1);
+  pVar1 = pVar1 >> 18;
+  pVar1 = ((32768 + pVar1) * (int32_t)bmeCalibPressure.par_p1) >> 15;
+
+  uint32_t pressComp = 1048576 - pressRaw;
+  pressComp = (uint32_t)((pressComp - (pVar2 >> 12)) * (uint32_t)3125);
+  if (pressComp >= (1u << 30))
+  {
+    pressComp = (pressComp / (uint32_t)pVar1) << 1;
   }
   else
   {
-    Serial.print("Success!");
+    pressComp = (pressComp << 1) / (uint32_t)pVar1;
   }
+
+  int32_t pVar1b = ((int32_t)bmeCalibPressure.par_p9 *
+                     (int32_t)(((pressComp >> 3) * (pressComp >> 3)) >> 13)) >> 12;
+  int32_t pVar2b = ((int32_t)(pressComp >> 2) * (int32_t)bmeCalibPressure.par_p8) >> 13;
+  int32_t pVar3b = ((int32_t)(pressComp >> 8) * (int32_t)(pressComp >> 8) * (int32_t)(pressComp >> 8) *
+                     (int32_t)bmeCalibPressure.par_p10) >>
+                    17;
+  int32_t pressCompFinal = (int32_t)pressComp +
+                            ((pVar1b + pVar2b + pVar3b + ((int32_t)bmeCalibPressure.par_p7 << 7)) >> 4);
+
+  int32_t tempScaled = tempComp;
+  int32_t hVar1 = humRaw - ((int32_t)bmeCalibHumidity.par_h1 << 4) -
+                  (((tempScaled * (int32_t)bmeCalibHumidity.par_h3) / 100) >> 1);
+  int32_t hVar2 = ((int32_t)bmeCalibHumidity.par_h2 *
+                    (((tempScaled * (int32_t)bmeCalibHumidity.par_h4) / 100) +
+                     (((tempScaled * ((tempScaled * (int32_t)bmeCalibHumidity.par_h5) / 100)) >> 6) / 100) +
+                     (int32_t)(1 << 14))) >>
+                   10;
+  int32_t hVar3 = hVar1 * hVar2;
+  int32_t hVar4 = (((int32_t)bmeCalibHumidity.par_h6 << 7) +
+                    ((tempScaled * (int32_t)bmeCalibHumidity.par_h7) / 100)) >>
+                   4;
+  int32_t hVar5 = ((hVar3 >> 14) * (hVar3 >> 14)) >> 10;
+  int32_t hVar6 = (hVar4 * hVar5) >> 1;
+  int32_t humComp = (((hVar3 + hVar6) >> 10) * 1000) >> 12;
+
+  data.temperature = tempComp / 100.0f;
+  data.pressure = pressCompFinal / 100.0f;
+  data.humidity = humComp / 1000.0f;
+  data.gasResistance = 0.0f; // not implemented, see TODO on BmeData
+  data.valid = true;
+}
+
+// ---------------------------------------------------------------------------
+
+void setup()
+{
+  Serial.begin(115200);
+  Wire.begin(21, 22);
+  Serial.print("Connecting... :)\n\n");
+
+  // Wake the MPU-6050 — it boots in sleep mode.
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(MPU_PWR_MGMT_1);
+  Wire.write(0x01);
+  Wire.endTransmission();
+
+  readBmeCalibration();
 }
 
 void loop()
 {
+  readMpu(mpuData);
+  readBme(bmeData);
+  readCompass(compassData);
 
-  Wire.beginTransmission(0x68);
-  Wire.write(0x3b);
-  Wire.endTransmission(false);
-
-  int check = Wire.requestFrom(0x68, 14);
-
-  // this needs to be change to accomidate for a struct
-
-  if (check != 14)
+  if (mpuData.valid)
   {
-    Serial.println("Error Recieving transmission!");
-    Serial.print("Actually only recieved : ");
-    Serial.print(check);
-    Serial.println("/14");
-    delay(2000);
-    return;
+    Serial.print("Accel (g): X=");
+    Serial.print(toUnits(mpuData.accelX, ACCEL_CONST));
+    Serial.print(" Y=");
+    Serial.print(toUnits(mpuData.accelY, ACCEL_CONST));
+    Serial.print(" Z=");
+    Serial.println(toUnits(mpuData.accelZ, ACCEL_CONST));
+
+    Serial.print("Gyro (deg/s): X=");
+    Serial.print(toUnits(mpuData.gyroX, GYRO_CONST));
+    Serial.print(" Y=");
+    Serial.print(toUnits(mpuData.gyroY, GYRO_CONST));
+    Serial.print(" Z=");
+    Serial.println(toUnits(mpuData.gyroZ, GYRO_CONST));
+
+    Serial.print("MPU Temp (C): ");
+    Serial.println(toUnits(mpuData.temp, TEMP_CONST) + TEMP_OFFSET);
   }
   else
   {
-    Serial.print("Success!");
+    Serial.println("MPU read failed");
   }
 
-  for (int i = 0; i < 7; i++)
+  if (bmeData.valid)
   {
-    Serial.println();
-    Serial.println();
-    Serial.println();    
-
-    uint8_t highByte = Wire.read();
-    uint8_t lowByte = Wire.read();
-
-    switch (i)
-    {
-    case 0:
-    {
-      mpuData.accelX = combine(highByte, lowByte);
-      float gForceX = toUnits(mpuData.accelX, accelConst);
-      Serial.print("Acceleration on X: ");
-      Serial.println(gForceX);
-      break;
-    }
-    case 1:
-    {
-      mpuData.accelY = combine(highByte, lowByte);
-      float gForceY = toUnits(mpuData.accelY, accelConst);
-      Serial.print("Acceleration on Y: ");
-      Serial.println(gForceY);
-      break;
-    }
-    case 2:
-    {
-      mpuData.accelZ = combine(highByte, lowByte);
-      float gForceZ = toUnits(mpuData.accelZ, accelConst);
-      Serial.print("Acceleration on Z: ");
-      Serial.println(gForceZ);
-      break;
-    }
-    case 3:
-    {
-      mpuData.temp = combine(highByte, lowByte);
-      float tempC = toUnits(mpuData.temp, tempConst) + 36.53; // MPU6050 datasheet offset, not part of toUnits
-      Serial.print("Temperature: ");
-      Serial.println(tempC);
-      break;
-    }
-    case 4:
-    {
-      mpuData.gyroX = combine(highByte, lowByte);
-      float degPerSecX = toUnits(mpuData.gyroX, gyroConst);
-      Serial.print("Gyro on X: ");
-      Serial.println(degPerSecX);
-      break;
-    }
-    case 5:
-    {
-      mpuData.gyroY = combine(highByte, lowByte);
-      float degPerSecY = toUnits(mpuData.gyroY, gyroConst);
-      Serial.print("Gyro on Y: ");
-      Serial.println(degPerSecY);
-      break;
-    }
-    case 6:
-    {
-      mpuData.gyroZ = combine(highByte, lowByte);
-      float degPerSecZ = toUnits(mpuData.gyroZ, gyroConst);
-      Serial.print("Gyro on Z: ");
-      Serial.println(degPerSecZ);
-      break;
-    }
-    }
+    Serial.print("BME Temp (C): ");
+    Serial.println(bmeData.temperature);
+    Serial.print("BME Pressure (hPa): ");
+    Serial.println(bmeData.pressure);
+    Serial.print("BME Humidity (%RH): ");
+    Serial.println(bmeData.humidity);
+  }
+  else
+  {
+    Serial.println("BME read failed");
   }
 
-  
-  delay(2000);
+  if (compassData.valid)
+  {
+    Serial.print("Heading (deg): ");
+    Serial.println(compassData.headingDegrees);
+  }
+  else
+  {
+    Serial.println("Compass read failed");
+  }
+
+  Serial.println();
+  delay(500);
 }
-
-
-float toUnits(int16_t x, float constant){
-  return x / constant;
-}
-
-
-int16_t combine(uint8_t h, uint8_t l){
-  uint16_t temp = (uint16_t)(h << 8) | l;
-  return ((int16_t) temp);
-}
-

@@ -53,6 +53,20 @@ void loop()
 
   // this needs to be change to accomidate for a struct
 
+  if (check != 14)
+  {
+    Serial.println("Error Recieving transmission!");
+    Serial.print("Actually only recieved : ");
+    Serial.print(check);
+    Serial.println("/14");
+    delay(2000);
+    return;
+  }
+  else
+  {
+    Serial.print("Success!");
+  }
+
   for (int i = 0; i < 7; i++)
   {
     Serial.println();
@@ -123,14 +137,7 @@ void loop()
     }
   }
 
-  if (check != 14)
-  {
-    Serial.print("Error Recieving transmission!");
-  }
-  else
-  {
-    Serial.print("Success!");
-  }
+  
   delay(2000);
 }
 
@@ -141,7 +148,7 @@ float toUnits(int16_t x, float constant){
 
 
 int16_t combine(uint8_t h, uint8_t l){
-  uint_16 temp = (uint16_t)(h << 8) | l;
-  return ((int16_t) temp)
+  uint16_t temp = (uint16_t)(h << 8) | l;
+  return ((int16_t) temp);
 }
 
