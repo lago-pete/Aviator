@@ -467,26 +467,26 @@ void displayGPS(String s)
                 temp.fixQual, temp.satCount, temp.hdop, temp.altitude);
 }
 
+String bufferGPS;
+
+// This is kinda a pain but to allow the loop to continue running I'm trying to design a way to retain the buffer internally while the fulls tring isnt quite reaady yet.
+// This will allow the other I2C devices to continue running if need be, but it also elliminates the possibility of getting caught in an internal loop inside the GPS. Rabble Rabble Rabble
+// This will read all the data from the GPS buffer on, but will exit when its dry, this way it wont stay there looking for data. Like if a wire came undone.
 void readGPS(GPSData &data)
 {
+
   while (Serial2.available() > 0)
   {
     int ans = Serial2.read();
+
     if (ans == '$')
     {
-      String sentence = "$";
-      while (ans != '\n')
-      {
-        if (Serial2.available() > 0)
-        {
-          ans = Serial2.read();
-          if (ans != '\n')
-          {
-            sentence += (char)ans;
-          }
-        }
-      }
-
+      bufferGPS = "$";
+      data.valid = false;
+    }
+    else if (ans == '\n')
+    {
+      String sentence = bufferGPS;
       int index = sentence.indexOf(',');
       String check = sentence.substring(0, index);
       if (check == "$GNGGA")
@@ -496,20 +496,21 @@ void readGPS(GPSData &data)
         if (indexCheck != -1)
         {
           String checkSum = sentence.substring(1, indexCheck);
-          uint8_t temp = 0;
+          uint8_t tempCS = 0;
           for (int i = 0; i < checkSum.length(); i++)
           {
-            temp ^= checkSum.charAt(i);
+            tempCS ^= checkSum.charAt(i);
           }
 
           String expectedStr = sentence.substring(indexCheck + 1);
           expectedStr.trim();
           uint8_t expected = (uint8_t)strtol(expectedStr.c_str(), NULL, 16);
 
-          if (temp != expected)
+          if (tempCS != expected)
           {
             data.valid = false;
-            Serial.printf("Checksum mismatch: calc=%02X expected=%02X sentence=%s\n", temp, expected, sentence.c_str());
+            Serial.printf("Checksum mismatch: calc=%02X expected=%02X sentence=%s\n", tempCS, expected, sentence.c_str());
+            data.valid = false;
           }
           else
           {
@@ -519,10 +520,21 @@ void readGPS(GPSData &data)
         }
       }
     }
+    else
+    {
+      if (bufferGPS.length() > 200)
+      {
+        bufferGPS = "";
+        continue;
+      }
+      bufferGPS += (char)ans;
+    }
   }
 }
 
 // ---------------------------------------------------------------------------
+long lastPrint = 0;
+long lastGPS = 0;
 
 void setup()
 {
@@ -530,6 +542,7 @@ void setup()
   Serial2.begin(38400, SERIAL_8N1, 16, 17);
   Wire.begin(21, 22);
   Serial.print("Connecting... :)\n\n");
+  lastGPS = millis();
 
   // Wake the MPU-6050 — it boots in sleep mode.
   Wire.beginTransmission(MPU_ADDR);
@@ -540,7 +553,6 @@ void setup()
   readBmeCalibration();
 }
 
-long lastPrint = 0;
 void loop()
 {
   readMpu(mpuData);
@@ -551,6 +563,7 @@ void loop()
   long now = millis();
   if (now - lastPrint > 500) // instead of Delay of (500) I going with this strat. This will allow the gps to continue cycling the buffer rather then having to wait for the delay to finish.
   {
+    lastPrint = now;
     if (mpuData.valid)
     {
       Serial.print("Accel (g): X=");
@@ -602,10 +615,24 @@ void loop()
     if (gpsData.valid)
     {
       displayGPS(gpsData.finalString);
+      lastGPS = now;
     }
     else
     {
       Serial.println("GPS read failed");
+    }
+    if (now - lastGPS > 5000)
+    {
+      Serial.println();
+      Serial.println();
+      Serial.println("-----------Warning---------");
+      Serial.print("It has been: ");
+      Serial.print((now - lastGPS));
+      Serial.print("m/s  since the last GPS reading. Potential HardWare Malfunction!");
+      Serial.println();
+      Serial.println("-----------Warning---------");
+      Serial.println();
+      Serial.println();
     }
   }
 }
