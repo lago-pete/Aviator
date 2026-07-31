@@ -1,0 +1,686 @@
+#include <Arduino.h>
+#include <Wire.h>
+
+// ---------------------------------------------------------------------------
+// Sensor data structs — one "latest known good reading" per sensor.
+// valid is false whenever the most recent read attempt failed, so callers
+// can skip stale data instead of acting on it.
+// ---------------------------------------------------------------------------
+
+struct MpuData
+{
+  int16_t accelX = 0, accelY = 0, accelZ = 0;
+  int16_t temp = 0;
+  int16_t gyroX = 0, gyroY = 0, gyroZ = 0;
+  bool valid = false;
+};
+
+struct BmeData
+{
+  float temperature = 0;
+  float humidity = 0;
+  float pressure = 0;
+  float gasResistance = 0; // TODO: heater/gas-measurement sequence not implemented — no proven reference for this board
+  bool valid = false;
+};
+
+struct CompassData
+{
+  float headingDegrees = 0;
+  int16_t rawX = 0, rawY = 0, rawZ = 0;
+  bool valid = false;
+};
+
+struct GPSData
+{
+  String finalString;
+  bool valid = false;
+};
+
+MpuData mpuData;
+BmeData bmeData;
+CompassData compassData;
+GPSData gpsData;
+
+// ---------------------------------------------------------------------------
+// MPU-6050 (accel/gyro/temp)
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t MPU_ADDR = 0x68;
+constexpr uint8_t MPU_PWR_MGMT_1 = 0x6B;
+constexpr uint8_t MPU_DATA_START = 0x3B;
+constexpr float ACCEL_CONST = 16384.0f;
+constexpr float GYRO_CONST = 131.0f;
+constexpr float TEMP_CONST = 340.0f;
+constexpr float TEMP_OFFSET = 36.53f; // MPU6050 datasheet offset
+
+int16_t combine(uint8_t h, uint8_t l)
+{
+  uint16_t temp = (uint16_t)((h << 8) | l);
+  return (int16_t)temp;
+}
+
+float toUnits(int16_t x, float constant)
+{
+  return x / constant;
+}
+
+void readMpu(MpuData &data)
+{
+  data.valid = false; // assume failure until proven otherwise
+
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(MPU_DATA_START);
+  Wire.endTransmission(false);
+
+  int received = Wire.requestFrom((int)MPU_ADDR, 14);
+  if (received != 14)
+  {
+    return; // data.valid stays false, bail out early
+  }
+
+  int16_t values[7];
+  for (int i = 0; i < 7; i++)
+  {
+    uint8_t highByte = Wire.read();
+    uint8_t lowByte = Wire.read();
+    values[i] = combine(highByte, lowByte);
+  }
+
+  data.accelX = values[0];
+  data.accelY = values[1];
+  data.accelZ = values[2];
+  data.temp = values[3];
+  data.gyroX = values[4];
+  data.gyroY = values[5];
+  data.gyroZ = values[6];
+  data.valid = true;
+}
+
+// ---------------------------------------------------------------------------
+// IST8310 compass
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t COMPASS_ADDR = 0x0E;
+constexpr uint8_t COMPASS_CNTL1 = 0x0A;
+constexpr uint8_t COMPASS_STAT1 = 0x02;
+constexpr uint8_t COMPASS_DATA_START = 0x03;
+constexpr float COMPASS_UT_PER_LSB = 0.3f;
+constexpr unsigned long COMPASS_TIMEOUT_MS = 50;
+
+void readCompass(CompassData &data)
+{
+  data.valid = false;
+
+  // Single-measurement mode — the IST8310 auto-reverts to standby after one
+  // reading, so this has to be written every call.
+  Wire.beginTransmission(COMPASS_ADDR);
+  Wire.write(COMPASS_CNTL1);
+  Wire.write(0x01);
+  Wire.endTransmission();
+
+  Wire.beginTransmission(COMPASS_ADDR);
+  Wire.write(COMPASS_STAT1);
+  Wire.endTransmission(false);
+
+  unsigned long start = millis();
+  uint8_t status;
+  do
+  {
+    Wire.requestFrom((int)COMPASS_ADDR, 1);
+    status = Wire.read();
+    if (status & 0x01)
+    {
+      break; // DRDY set
+    }
+    if (millis() - start > COMPASS_TIMEOUT_MS)
+    {
+      return; // timed out waiting for DRDY
+    }
+  } while (true);
+
+  Wire.beginTransmission(COMPASS_ADDR);
+  Wire.write(COMPASS_DATA_START);
+  Wire.endTransmission(false);
+
+  Wire.requestFrom((int)COMPASS_ADDR, 6);
+  uint8_t xl = Wire.read();
+  uint8_t xh = Wire.read();
+  uint8_t yl = Wire.read();
+  uint8_t yh = Wire.read();
+  uint8_t zl = Wire.read();
+  uint8_t zh = Wire.read();
+
+  data.rawX = combine(xh, xl);
+  data.rawY = combine(yh, yl);
+  data.rawZ = combine(zh, zl);
+
+  float pos_x = data.rawX * COMPASS_UT_PER_LSB;
+  float pos_y = data.rawY * COMPASS_UT_PER_LSB;
+
+  // Sign flipped on both axes — the chip is mounted inverted on the board.
+  float heading_rad = atan2(-pos_y, -pos_x);
+  float heading_deg = heading_rad * 180.0f / M_PI;
+  if (heading_deg < 0.0f)
+  {
+    heading_deg += 360.0f;
+  }
+
+  data.headingDegrees = heading_deg;
+  data.valid = true;
+}
+
+// ---------------------------------------------------------------------------
+// BME680 (temp/pressure/humidity)
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t BME_ADDR = 0x77;
+constexpr uint8_t BME_CTRL_HUM = 0x72;
+constexpr uint8_t BME_CTRL_MEAS = 0x74;
+constexpr uint8_t BME_STATUS = 0x1D;
+constexpr uint8_t BME_PRESS_MSB = 0x1F;
+constexpr uint8_t BME_TEMP_MSB = 0x22;
+constexpr uint8_t BME_HUM_MSB = 0x25;
+constexpr uint8_t BME_CALIB_BLOCK1 = 0x89; // 25 bytes
+constexpr uint8_t BME_CALIB_BLOCK2 = 0xE1; // 16 bytes
+constexpr unsigned long BME_TIMEOUT_MS = 100;
+
+constexpr uint8_t BME_TEMP_OS = 0x03;  // x4 oversampling
+constexpr uint8_t BME_PRESS_OS = 0x03; // x4 oversampling
+constexpr uint8_t BME_HUM_OS = 0x01;   // x1 oversampling
+
+struct BmeCalibTemp
+{
+  uint16_t par_t1;
+  int16_t par_t2;
+  int8_t par_t3;
+} bmeCalibTemp;
+
+struct BmeCalibPressure
+{
+  uint16_t par_p1;
+  int16_t par_p2;
+  int8_t par_p3;
+  int16_t par_p4;
+  int16_t par_p5;
+  int8_t par_p6;
+  int8_t par_p7;
+  int16_t par_p8;
+  int16_t par_p9;
+  uint8_t par_p10;
+} bmeCalibPressure;
+
+struct BmeCalibHumidity
+{
+  uint16_t par_h1;
+  uint16_t par_h2;
+  int8_t par_h3;
+  int8_t par_h4;
+  int8_t par_h5;
+  uint8_t par_h6;
+  int8_t par_h7;
+} bmeCalibHumidity;
+
+// One-time: set oversampling and pull the factory calibration trim values.
+void readBmeCalibration()
+{
+  uint8_t buffer1[25];
+  uint8_t buffer2[16];
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_CTRL_HUM);
+  Wire.write(BME_HUM_OS);
+  Wire.endTransmission();
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_CALIB_BLOCK1);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)BME_ADDR, 25);
+  for (int i = 0; i < 25; i++)
+  {
+    buffer1[i] = Wire.read();
+  }
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_CALIB_BLOCK2);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)BME_ADDR, 16);
+  for (int i = 0; i < 16; i++)
+  {
+    buffer2[i] = Wire.read();
+  }
+
+  bmeCalibTemp.par_t1 = (uint16_t)((buffer2[9] << 8) | buffer2[8]);
+  bmeCalibTemp.par_t2 = (int16_t)((buffer1[2] << 8) | buffer1[1]);
+  bmeCalibTemp.par_t3 = (int8_t)buffer1[3];
+
+  bmeCalibPressure.par_p1 = (uint16_t)((buffer1[6] << 8) | buffer1[5]);
+  bmeCalibPressure.par_p2 = (int16_t)((buffer1[8] << 8) | buffer1[7]);
+  bmeCalibPressure.par_p3 = (int8_t)buffer1[9];
+  bmeCalibPressure.par_p4 = (int16_t)((buffer1[12] << 8) | buffer1[11]);
+  bmeCalibPressure.par_p5 = (int16_t)((buffer1[14] << 8) | buffer1[13]);
+  bmeCalibPressure.par_p7 = (int8_t)buffer1[15];
+  bmeCalibPressure.par_p6 = (int8_t)buffer1[16];
+  bmeCalibPressure.par_p8 = (int16_t)((buffer1[20] << 8) | buffer1[19]);
+  bmeCalibPressure.par_p9 = (int16_t)((buffer1[22] << 8) | buffer1[21]);
+  bmeCalibPressure.par_p10 = buffer1[23];
+
+  bmeCalibHumidity.par_h3 = (int8_t)buffer2[3];
+  bmeCalibHumidity.par_h4 = (int8_t)buffer2[4];
+  bmeCalibHumidity.par_h5 = (int8_t)buffer2[5];
+  bmeCalibHumidity.par_h6 = buffer2[6];
+  bmeCalibHumidity.par_h7 = (int8_t)buffer2[7];
+  bmeCalibHumidity.par_h1 = (uint16_t)((buffer2[2] << 4) | (buffer2[1] & 0x0F));
+  bmeCalibHumidity.par_h2 = (uint16_t)((buffer2[0] << 4) | ((buffer2[1] & 0xF0) >> 4));
+}
+
+void readBme(BmeData &data)
+{
+  data.valid = false;
+
+  // Forced mode: takes one measurement using the configured oversampling,
+  // then the sensor reverts to sleep on its own.
+  uint8_t meas = (BME_TEMP_OS << 5) | (BME_PRESS_OS << 2) | 0x01;
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_CTRL_MEAS);
+  Wire.write(meas);
+  Wire.endTransmission();
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_STATUS);
+  Wire.endTransmission(false);
+
+  unsigned long start = millis();
+  uint8_t status;
+  do
+  {
+    Wire.requestFrom((int)BME_ADDR, 1);
+    status = Wire.read();
+    if (status & 0x80)
+    {
+      break; // new_data_0 set
+    }
+    if (millis() - start > BME_TIMEOUT_MS)
+    {
+      return; // timed out waiting for the measurement
+    }
+  } while (true);
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_PRESS_MSB);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)BME_ADDR, 3);
+  uint8_t pressMSB = Wire.read();
+  uint8_t pressLSB = Wire.read();
+  uint8_t pressXLSB = (Wire.read() & 0xF0) >> 4;
+  int32_t pressRaw = (int32_t)(((uint32_t)pressMSB << 12) | ((uint32_t)pressLSB << 4) | pressXLSB);
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_TEMP_MSB);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)BME_ADDR, 3);
+  uint8_t tempMSB = Wire.read();
+  uint8_t tempLSB = Wire.read();
+  uint8_t tempXLSB = (Wire.read() & 0xF0) >> 4;
+  int32_t tempRaw = (int32_t)(((uint32_t)tempMSB << 12) | ((uint32_t)tempLSB << 4) | tempXLSB);
+
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(BME_HUM_MSB);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)BME_ADDR, 2);
+  uint8_t humMSB = Wire.read();
+  uint8_t humLSB = Wire.read();
+  int16_t humRaw = (int16_t)(((uint16_t)humMSB << 8) | humLSB);
+
+  // --- Compensation formulas (Bosch BME680 datasheet) ---
+
+  int32_t tVar1 = (tempRaw >> 3) - ((int32_t)bmeCalibTemp.par_t1 << 1);
+  int32_t tVar2 = (tVar1 * bmeCalibTemp.par_t2) >> 11;
+  int32_t tVar3 = ((tVar1 >> 1) * (tVar1 >> 1)) >> 12;
+  tVar3 = (tVar3 * ((int32_t)bmeCalibTemp.par_t3 << 4)) >> 14;
+  int32_t tFine = tVar2 + tVar3;
+  int32_t tempComp = ((tFine * 5) + 128) >> 8;
+
+  int32_t pVar1 = ((int32_t)tFine >> 1) - 64000;
+  int32_t pVar2 = (((pVar1 >> 2) * (pVar1 >> 2)) >> 11) * (int32_t)bmeCalibPressure.par_p6;
+  pVar2 = pVar2 + ((pVar1 * (int32_t)bmeCalibPressure.par_p5) << 1);
+  pVar2 = (pVar2 >> 2) + ((int32_t)bmeCalibPressure.par_p4 << 16);
+  pVar1 = (((((pVar1 >> 2) * (pVar1 >> 2)) >> 13) * ((int32_t)bmeCalibPressure.par_p3 << 5)) >> 3) +
+          (((int32_t)bmeCalibPressure.par_p2 * pVar1) >> 1);
+  pVar1 = pVar1 >> 18;
+  pVar1 = ((32768 + pVar1) * (int32_t)bmeCalibPressure.par_p1) >> 15;
+
+  uint32_t pressComp = 1048576 - pressRaw;
+  pressComp = (uint32_t)((pressComp - (pVar2 >> 12)) * (uint32_t)3125);
+  if (pressComp >= (1u << 30))
+  {
+    pressComp = (pressComp / (uint32_t)pVar1) << 1;
+  }
+  else
+  {
+    pressComp = (pressComp << 1) / (uint32_t)pVar1;
+  }
+
+  int32_t pVar1b = ((int32_t)bmeCalibPressure.par_p9 *
+                    (int32_t)(((pressComp >> 3) * (pressComp >> 3)) >> 13)) >>
+                   12;
+  int32_t pVar2b = ((int32_t)(pressComp >> 2) * (int32_t)bmeCalibPressure.par_p8) >> 13;
+  int32_t pVar3b = ((int32_t)(pressComp >> 8) * (int32_t)(pressComp >> 8) * (int32_t)(pressComp >> 8) *
+                    (int32_t)bmeCalibPressure.par_p10) >>
+                   17;
+  int32_t pressCompFinal = (int32_t)pressComp +
+                           ((pVar1b + pVar2b + pVar3b + ((int32_t)bmeCalibPressure.par_p7 << 7)) >> 4);
+
+  int32_t tempScaled = tempComp;
+  int32_t hVar1 = humRaw - ((int32_t)bmeCalibHumidity.par_h1 << 4) -
+                  (((tempScaled * (int32_t)bmeCalibHumidity.par_h3) / 100) >> 1);
+  int32_t hVar2 = ((int32_t)bmeCalibHumidity.par_h2 *
+                   (((tempScaled * (int32_t)bmeCalibHumidity.par_h4) / 100) +
+                    (((tempScaled * ((tempScaled * (int32_t)bmeCalibHumidity.par_h5) / 100)) >> 6) / 100) +
+                    (int32_t)(1 << 14))) >>
+                  10;
+  int32_t hVar3 = hVar1 * hVar2;
+  int32_t hVar4 = (((int32_t)bmeCalibHumidity.par_h6 << 7) +
+                   ((tempScaled * (int32_t)bmeCalibHumidity.par_h7) / 100)) >>
+                  4;
+  int32_t hVar5 = ((hVar3 >> 14) * (hVar3 >> 14)) >> 10;
+  int32_t hVar6 = (hVar4 * hVar5) >> 1;
+  int32_t humComp = (((hVar3 + hVar6) >> 10) * 1000) >> 12;
+
+  data.temperature = tempComp / 100.0f;
+  data.pressure = pressCompFinal / 100.0f;
+  data.humidity = humComp / 1000.0f;
+  data.gasResistance = 0.0f; // not implemented, see TODO on BmeData
+  data.valid = true;
+}
+
+// ---------------------------------------------------------------------------
+// GPS Coords (Hour/Min/Sec) (lat/lon)
+// ---------------------------------------------------------------------------
+struct GPSTime
+{
+  int hour;
+  int minute;
+  float sec;
+};
+
+struct GPSReading
+{
+  double lat;
+  double lon;
+  char latDir;
+  char lonDir;
+  int fixQual;
+  int satCount;
+  float hdop;
+  float altitude;
+  GPSTime time;
+};
+void displayGPS(String s)
+{
+  GPSReading temp;
+  int indexS = 0;
+  int indexE = 0;
+
+  indexS = s.indexOf(',') + 1;
+  indexE = s.indexOf(',', indexS);
+  String tempTime = s.substring(indexS, indexE);
+  temp.time.hour = tempTime.substring(0, 2).toInt();
+  temp.time.minute = tempTime.substring(2, 4).toInt();
+  temp.time.sec = tempTime.substring(4).toFloat();
+
+  indexS = indexE + 1;
+  indexE = s.indexOf(',', indexS);
+  temp.lat = s.substring(indexS, indexE).toDouble();
+
+  indexS = indexE + 1;
+  indexE = s.indexOf(',', indexS);
+  temp.latDir = s.substring(indexS, indexE).charAt(0);
+
+  indexS = indexE + 1;
+  indexE = s.indexOf(',', indexS);
+  temp.lon = s.substring(indexS, indexE).toDouble();
+
+  indexS = indexE + 1;
+  indexE = s.indexOf(',', indexS);
+  temp.lonDir = s.substring(indexS, indexE).charAt(0);
+
+  indexS = indexE + 1;
+  indexE = s.indexOf(',', indexS);
+  temp.fixQual = s.substring(indexS, indexE).toInt();
+
+  indexS = indexE + 1;
+  indexE = s.indexOf(',', indexS);
+  temp.satCount = s.substring(indexS, indexE).toInt();
+
+  indexS = indexE + 1;
+  indexE = s.indexOf(',', indexS);
+  temp.hdop = s.substring(indexS, indexE).toFloat();
+
+  indexS = indexE + 1;
+  indexE = s.indexOf(',', indexS);
+  temp.altitude = s.substring(indexS, indexE).toFloat();
+
+  Serial.printf("  Time:     %02d:%02d:%05.2f UTC\n", temp.time.hour, temp.time.minute, temp.time.sec);
+  Serial.printf("  Lat/Lon:  %.5f %c   %.5f %c\n", temp.lat, temp.latDir, temp.lon, temp.lonDir);
+  Serial.printf("  Fix/Sats: %d / %d    HDOP: %.2f    Alt: %.1fm\n",
+                temp.fixQual, temp.satCount, temp.hdop, temp.altitude);
+}
+
+String bufferGPS;
+
+// This is kinda a pain but to allow the loop to continue running I'm trying to design a way to retain the buffer internally while the fulls tring isnt quite reaady yet.
+// This will allow the other I2C devices to continue running if need be, but it also elliminates the possibility of getting caught in an internal loop inside the GPS. Rabble Rabble Rabble
+// This will read all the data from the GPS buffer on, but will exit when its dry, this way it wont stay there looking for data. Like if a wire came undone.
+void readGPS(GPSData &data)
+{
+
+  while (Serial2.available() > 0)
+  {
+    int ans = Serial2.read();
+
+    if (ans == '$')
+    {
+      bufferGPS = "$";
+    }
+    else if (ans == '\n')
+    {
+      String sentence = bufferGPS;
+      int index = sentence.indexOf(',');
+      String check = sentence.substring(0, index);
+      if (check == "$GNGGA")
+      {
+        /// CheckSum Equation
+        int indexCheck = sentence.indexOf('*');
+        if (indexCheck != -1)
+        {
+          String checkSum = sentence.substring(1, indexCheck);
+          uint8_t tempCS = 0;
+          for (int i = 0; i < checkSum.length(); i++)
+          {
+            tempCS ^= checkSum.charAt(i);
+          }
+
+          String expectedStr = sentence.substring(indexCheck + 1);
+          expectedStr.trim();
+          uint8_t expected = (uint8_t)strtol(expectedStr.c_str(), NULL, 16);
+
+          if (tempCS != expected)
+          {
+            data.valid = false;
+            Serial.printf("Checksum mismatch: calc=%02X expected=%02X sentence=%s\n", tempCS, expected, sentence.c_str());
+          }
+          else
+          {
+            data.finalString = sentence;
+            data.valid = true;
+          }
+        }
+      }
+    }
+    else
+    {
+      if (bufferGPS.length() > 200)
+      {
+        bufferGPS = "";
+        continue;
+      }
+      bufferGPS += (char)ans;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Display helpers
+// ---------------------------------------------------------------------------
+
+constexpr int DASHBOARD_WIDTH = 46;
+
+void printDivider(char c = '-')
+{
+  for (int i = 0; i < DASHBOARD_WIDTH; i++)
+  {
+    Serial.print(c);
+  }
+  Serial.println();
+}
+
+long lastPrint = 0;
+long lastGPS = 0;
+
+// ---------------------------------------------------------------------------
+// Startup device check 
+// ---------------------------------------------------------------------------
+bool checkI2CDevice(uint8_t addr, const char *name)
+{
+  Wire.beginTransmission(addr);
+  bool found = (Wire.endTransmission() == 0);
+  Serial.printf("  %-10s (0x%02X): %s\n", name, addr, found ? "OK" : "NOT FOUND");
+  return found;
+}
+
+void runDeviceCheck()
+{
+  printDivider('=');
+  Serial.println("  STARTUP DEVICE CHECK");
+  printDivider('=');
+  checkI2CDevice(MPU_ADDR, "MPU-6050");
+  checkI2CDevice(COMPASS_ADDR, "IST8310");
+  checkI2CDevice(BME_ADDR, "BME680");
+  Serial.println("  GPS        (UART): listening on Serial2");
+  printDivider('=');
+  Serial.println();
+  delay(2000);
+}
+
+// ---------------------------------------------------------------------------
+// Loop dashboard — prints the latest reading from each sensor.
+// ---------------------------------------------------------------------------
+
+void printDashboard(long now)
+{
+  printDivider('=');
+  Serial.printf("  FLIGHT DATA   t=%.2fs\n", now / 1000.0);
+  printDivider('=');
+
+  Serial.println("[ IMU ]");
+  if (mpuData.valid)
+  {
+    Serial.printf("  Accel (g):     X=%7.3f  Y=%7.3f  Z=%7.3f\n",
+                   toUnits(mpuData.accelX, ACCEL_CONST),
+                   toUnits(mpuData.accelY, ACCEL_CONST),
+                   toUnits(mpuData.accelZ, ACCEL_CONST));
+    Serial.printf("  Gyro (deg/s):  X=%7.2f  Y=%7.2f  Z=%7.2f\n",
+                   toUnits(mpuData.gyroX, GYRO_CONST),
+                   toUnits(mpuData.gyroY, GYRO_CONST),
+                   toUnits(mpuData.gyroZ, GYRO_CONST));
+    Serial.printf("  Temp (C):      %6.2f\n",
+                   toUnits(mpuData.temp, TEMP_CONST) + TEMP_OFFSET);
+  }
+  else
+  {
+    Serial.println("  ** MPU READ FAILED **");
+  }
+  printDivider();
+
+  Serial.println("[ ENVIRONMENT ]");
+  if (bmeData.valid)
+  {
+    Serial.printf("  Temp (C):      %6.2f\n", bmeData.temperature);
+    Serial.printf("  Pressure (hPa):%7.2f\n", bmeData.pressure);
+    Serial.printf("  Humidity (%%RH):%6.2f\n", bmeData.humidity);
+  }
+  else
+  {
+    Serial.println("  ** BME READ FAILED **");
+  }
+  printDivider();
+
+  Serial.println("[ COMPASS ]");
+  if (compassData.valid)
+  {
+    Serial.printf("  Heading (deg): %6.2f\n", compassData.headingDegrees);
+  }
+  else
+  {
+    Serial.println("  ** COMPASS READ FAILED **");
+  }
+  printDivider();
+
+  Serial.println("[ GPS ]");
+  if (gpsData.valid)
+  {
+    displayGPS(gpsData.finalString);
+    lastGPS = now;
+  }
+  else
+  {
+    Serial.println("  ** GPS READ FAILED **");
+  }
+
+  if (now - lastGPS > 5000)
+  {
+    Serial.println();
+    printDivider('!');
+    Serial.printf("  WARNING: no GPS reading for %ld ms - possible hardware fault!\n", now - lastGPS);
+    printDivider('!');
+  }
+
+  Serial.println();
+}
+
+// ---------------------------------------------------------------------------
+
+void setup()
+{
+  Serial.begin(115200);
+  Serial2.begin(38400, SERIAL_8N1, 16, 17);
+  Wire.begin(21, 22);
+  Serial.print("Connecting... :)\n\n");
+  lastGPS = millis();
+
+  runDeviceCheck();
+
+  // Wake the MPU-6050 — it boots in sleep mode.
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(MPU_PWR_MGMT_1);
+  Wire.write(0x01);
+  Wire.endTransmission();
+
+  readBmeCalibration();
+}
+
+void loop()
+{
+  readMpu(mpuData);
+  readBme(bmeData);
+  readCompass(compassData);
+  readGPS(gpsData);
+
+  long now = millis();
+  if (now - lastPrint > 500) // instead of Delay of (500) I going with this strat. This will allow the gps to continue cycling the buffer rather then having to wait for the delay to finish.
+  {
+    lastPrint = now;
+    printDashboard(now);
+  }
+}
