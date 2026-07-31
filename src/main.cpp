@@ -461,9 +461,9 @@ void displayGPS(String s)
   indexE = s.indexOf(',', indexS);
   temp.altitude = s.substring(indexS, indexE).toFloat();
 
-  Serial.printf("Time: %02d:%02d:%05.2f  Lat: %.5f %c  Lon: %.5f %c  Fix: %d  Sats: %d  HDOP: %.2f  Alt: %.1fm\n",
-                temp.time.hour, temp.time.minute, temp.time.sec,
-                temp.lat, temp.latDir, temp.lon, temp.lonDir,
+  Serial.printf("  Time:     %02d:%02d:%05.2f UTC\n", temp.time.hour, temp.time.minute, temp.time.sec);
+  Serial.printf("  Lat/Lon:  %.5f %c   %.5f %c\n", temp.lat, temp.latDir, temp.lon, temp.lonDir);
+  Serial.printf("  Fix/Sats: %d / %d    HDOP: %.2f    Alt: %.1fm\n",
                 temp.fixQual, temp.satCount, temp.hdop, temp.altitude);
 }
 
@@ -482,7 +482,6 @@ void readGPS(GPSData &data)
     if (ans == '$')
     {
       bufferGPS = "$";
-      data.valid = false;
     }
     else if (ans == '\n')
     {
@@ -510,7 +509,6 @@ void readGPS(GPSData &data)
           {
             data.valid = false;
             Serial.printf("Checksum mismatch: calc=%02X expected=%02X sentence=%s\n", tempCS, expected, sentence.c_str());
-            data.valid = false;
           }
           else
           {
@@ -533,8 +531,125 @@ void readGPS(GPSData &data)
 }
 
 // ---------------------------------------------------------------------------
+// Display helpers
+// ---------------------------------------------------------------------------
+
+constexpr int DASHBOARD_WIDTH = 46;
+
+void printDivider(char c = '-')
+{
+  for (int i = 0; i < DASHBOARD_WIDTH; i++)
+  {
+    Serial.print(c);
+  }
+  Serial.println();
+}
+
 long lastPrint = 0;
 long lastGPS = 0;
+
+// ---------------------------------------------------------------------------
+// Startup device check 
+// ---------------------------------------------------------------------------
+bool checkI2CDevice(uint8_t addr, const char *name)
+{
+  Wire.beginTransmission(addr);
+  bool found = (Wire.endTransmission() == 0);
+  Serial.printf("  %-10s (0x%02X): %s\n", name, addr, found ? "OK" : "NOT FOUND");
+  return found;
+}
+
+void runDeviceCheck()
+{
+  printDivider('=');
+  Serial.println("  STARTUP DEVICE CHECK");
+  printDivider('=');
+  checkI2CDevice(MPU_ADDR, "MPU-6050");
+  checkI2CDevice(COMPASS_ADDR, "IST8310");
+  checkI2CDevice(BME_ADDR, "BME680");
+  Serial.println("  GPS        (UART): listening on Serial2");
+  printDivider('=');
+  Serial.println();
+  delay(2000);
+}
+
+// ---------------------------------------------------------------------------
+// Loop dashboard — prints the latest reading from each sensor.
+// ---------------------------------------------------------------------------
+
+void printDashboard(long now)
+{
+  printDivider('=');
+  Serial.printf("  FLIGHT DATA   t=%.2fs\n", now / 1000.0);
+  printDivider('=');
+
+  Serial.println("[ IMU ]");
+  if (mpuData.valid)
+  {
+    Serial.printf("  Accel (g):     X=%7.3f  Y=%7.3f  Z=%7.3f\n",
+                   toUnits(mpuData.accelX, ACCEL_CONST),
+                   toUnits(mpuData.accelY, ACCEL_CONST),
+                   toUnits(mpuData.accelZ, ACCEL_CONST));
+    Serial.printf("  Gyro (deg/s):  X=%7.2f  Y=%7.2f  Z=%7.2f\n",
+                   toUnits(mpuData.gyroX, GYRO_CONST),
+                   toUnits(mpuData.gyroY, GYRO_CONST),
+                   toUnits(mpuData.gyroZ, GYRO_CONST));
+    Serial.printf("  Temp (C):      %6.2f\n",
+                   toUnits(mpuData.temp, TEMP_CONST) + TEMP_OFFSET);
+  }
+  else
+  {
+    Serial.println("  ** MPU READ FAILED **");
+  }
+  printDivider();
+
+  Serial.println("[ ENVIRONMENT ]");
+  if (bmeData.valid)
+  {
+    Serial.printf("  Temp (C):      %6.2f\n", bmeData.temperature);
+    Serial.printf("  Pressure (hPa):%7.2f\n", bmeData.pressure);
+    Serial.printf("  Humidity (%%RH):%6.2f\n", bmeData.humidity);
+  }
+  else
+  {
+    Serial.println("  ** BME READ FAILED **");
+  }
+  printDivider();
+
+  Serial.println("[ COMPASS ]");
+  if (compassData.valid)
+  {
+    Serial.printf("  Heading (deg): %6.2f\n", compassData.headingDegrees);
+  }
+  else
+  {
+    Serial.println("  ** COMPASS READ FAILED **");
+  }
+  printDivider();
+
+  Serial.println("[ GPS ]");
+  if (gpsData.valid)
+  {
+    displayGPS(gpsData.finalString);
+    lastGPS = now;
+  }
+  else
+  {
+    Serial.println("  ** GPS READ FAILED **");
+  }
+
+  if (now - lastGPS > 5000)
+  {
+    Serial.println();
+    printDivider('!');
+    Serial.printf("  WARNING: no GPS reading for %ld ms - possible hardware fault!\n", now - lastGPS);
+    printDivider('!');
+  }
+
+  Serial.println();
+}
+
+// ---------------------------------------------------------------------------
 
 void setup()
 {
@@ -543,6 +658,8 @@ void setup()
   Wire.begin(21, 22);
   Serial.print("Connecting... :)\n\n");
   lastGPS = millis();
+
+  runDeviceCheck();
 
   // Wake the MPU-6050 — it boots in sleep mode.
   Wire.beginTransmission(MPU_ADDR);
@@ -564,75 +681,6 @@ void loop()
   if (now - lastPrint > 500) // instead of Delay of (500) I going with this strat. This will allow the gps to continue cycling the buffer rather then having to wait for the delay to finish.
   {
     lastPrint = now;
-    if (mpuData.valid)
-    {
-      Serial.print("Accel (g): X=");
-      Serial.print(toUnits(mpuData.accelX, ACCEL_CONST));
-      Serial.print(" Y=");
-      Serial.print(toUnits(mpuData.accelY, ACCEL_CONST));
-      Serial.print(" Z=");
-      Serial.println(toUnits(mpuData.accelZ, ACCEL_CONST));
-
-      Serial.print("Gyro (deg/s): X=");
-      Serial.print(toUnits(mpuData.gyroX, GYRO_CONST));
-      Serial.print(" Y=");
-      Serial.print(toUnits(mpuData.gyroY, GYRO_CONST));
-      Serial.print(" Z=");
-      Serial.println(toUnits(mpuData.gyroZ, GYRO_CONST));
-
-      Serial.print("MPU Temp (C): ");
-      Serial.println(toUnits(mpuData.temp, TEMP_CONST) + TEMP_OFFSET);
-    }
-    else
-    {
-      Serial.println("MPU read failed");
-    }
-
-    if (bmeData.valid)
-    {
-      Serial.print("BME Temp (C): ");
-      Serial.println(bmeData.temperature);
-      Serial.print("BME Pressure (hPa): ");
-      Serial.println(bmeData.pressure);
-      Serial.print("BME Humidity (%RH): ");
-      Serial.println(bmeData.humidity);
-    }
-    else
-    {
-      Serial.println("BME read failed");
-    }
-
-    if (compassData.valid)
-    {
-      Serial.print("Heading (deg): ");
-      Serial.println(compassData.headingDegrees);
-    }
-    else
-    {
-      Serial.println("Compass read failed");
-    }
-
-    if (gpsData.valid)
-    {
-      displayGPS(gpsData.finalString);
-      lastGPS = now;
-    }
-    else
-    {
-      Serial.println("GPS read failed");
-    }
-    if (now - lastGPS > 5000)
-    {
-      Serial.println();
-      Serial.println();
-      Serial.println("-----------Warning---------");
-      Serial.print("It has been: ");
-      Serial.print((now - lastGPS));
-      Serial.print("m/s  since the last GPS reading. Potential HardWare Malfunction!");
-      Serial.println();
-      Serial.println("-----------Warning---------");
-      Serial.println();
-      Serial.println();
-    }
+    printDashboard(now);
   }
 }
