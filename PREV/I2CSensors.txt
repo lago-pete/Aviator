@@ -31,16 +31,9 @@ struct CompassData
   bool valid = false;
 };
 
-struct GPSData
-{
-  String finalString;
-  bool valid = false;
-};
-
 MpuData mpuData;
 BmeData bmeData;
 CompassData compassData;
-GPSData gpsData;
 
 // ---------------------------------------------------------------------------
 // MPU-6050 (accel/gyro/temp)
@@ -362,27 +355,26 @@ void readBme(BmeData &data)
   }
 
   int32_t pVar1b = ((int32_t)bmeCalibPressure.par_p9 *
-                    (int32_t)(((pressComp >> 3) * (pressComp >> 3)) >> 13)) >>
-                   12;
+                     (int32_t)(((pressComp >> 3) * (pressComp >> 3)) >> 13)) >> 12;
   int32_t pVar2b = ((int32_t)(pressComp >> 2) * (int32_t)bmeCalibPressure.par_p8) >> 13;
   int32_t pVar3b = ((int32_t)(pressComp >> 8) * (int32_t)(pressComp >> 8) * (int32_t)(pressComp >> 8) *
-                    (int32_t)bmeCalibPressure.par_p10) >>
-                   17;
+                     (int32_t)bmeCalibPressure.par_p10) >>
+                    17;
   int32_t pressCompFinal = (int32_t)pressComp +
-                           ((pVar1b + pVar2b + pVar3b + ((int32_t)bmeCalibPressure.par_p7 << 7)) >> 4);
+                            ((pVar1b + pVar2b + pVar3b + ((int32_t)bmeCalibPressure.par_p7 << 7)) >> 4);
 
   int32_t tempScaled = tempComp;
   int32_t hVar1 = humRaw - ((int32_t)bmeCalibHumidity.par_h1 << 4) -
                   (((tempScaled * (int32_t)bmeCalibHumidity.par_h3) / 100) >> 1);
   int32_t hVar2 = ((int32_t)bmeCalibHumidity.par_h2 *
-                   (((tempScaled * (int32_t)bmeCalibHumidity.par_h4) / 100) +
-                    (((tempScaled * ((tempScaled * (int32_t)bmeCalibHumidity.par_h5) / 100)) >> 6) / 100) +
-                    (int32_t)(1 << 14))) >>
-                  10;
+                    (((tempScaled * (int32_t)bmeCalibHumidity.par_h4) / 100) +
+                     (((tempScaled * ((tempScaled * (int32_t)bmeCalibHumidity.par_h5) / 100)) >> 6) / 100) +
+                     (int32_t)(1 << 14))) >>
+                   10;
   int32_t hVar3 = hVar1 * hVar2;
   int32_t hVar4 = (((int32_t)bmeCalibHumidity.par_h6 << 7) +
-                   ((tempScaled * (int32_t)bmeCalibHumidity.par_h7) / 100)) >>
-                  4;
+                    ((tempScaled * (int32_t)bmeCalibHumidity.par_h7) / 100)) >>
+                   4;
   int32_t hVar5 = ((hVar3 >> 14) * (hVar3 >> 14)) >> 10;
   int32_t hVar6 = (hVar4 * hVar5) >> 1;
   int32_t humComp = (((hVar3 + hVar6) >> 10) * 1000) >> 12;
@@ -395,139 +387,10 @@ void readBme(BmeData &data)
 }
 
 // ---------------------------------------------------------------------------
-// GPS Coords (Hour/Min/Sec) (lat/lon)
-// ---------------------------------------------------------------------------
-struct GPSTime
-{
-  int hour;
-  int minute;
-  float sec;
-};
-
-struct GPSReading
-{
-  double lat;
-  double lon;
-  char latDir;
-  char lonDir;
-  int fixQual;
-  int satCount;
-  float hdop;
-  float altitude;
-  GPSTime time;
-};
-void displayGPS(String s)
-{
-  GPSReading temp;
-  int indexS = 0;
-  int indexE = 0;
-
-  indexS = s.indexOf(',') + 1;
-  indexE = s.indexOf(',', indexS);
-  String tempTime = s.substring(indexS, indexE);
-  temp.time.hour = tempTime.substring(0, 2).toInt();
-  temp.time.minute = tempTime.substring(2, 4).toInt();
-  temp.time.sec = tempTime.substring(4).toFloat();
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.lat = s.substring(indexS, indexE).toDouble();
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.latDir = s.substring(indexS, indexE).charAt(0);
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.lon = s.substring(indexS, indexE).toDouble();
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.lonDir = s.substring(indexS, indexE).charAt(0);
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.fixQual = s.substring(indexS, indexE).toInt();
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.satCount = s.substring(indexS, indexE).toInt();
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.hdop = s.substring(indexS, indexE).toFloat();
-
-  indexS = indexE + 1;
-  indexE = s.indexOf(',', indexS);
-  temp.altitude = s.substring(indexS, indexE).toFloat();
-
-  Serial.printf("Time: %02d:%02d:%05.2f  Lat: %.5f %c  Lon: %.5f %c  Fix: %d  Sats: %d  HDOP: %.2f  Alt: %.1fm\n",
-                temp.time.hour, temp.time.minute, temp.time.sec,
-                temp.lat, temp.latDir, temp.lon, temp.lonDir,
-                temp.fixQual, temp.satCount, temp.hdop, temp.altitude);
-}
-
-void readGPS(GPSData &data)
-{
-  while (Serial2.available() > 0)
-  {
-    int ans = Serial2.read();
-    if (ans == '$')
-    {
-      String sentence = "$";
-      while (ans != '\n')
-      {
-        if (Serial2.available() > 0)
-        {
-          ans = Serial2.read();
-          if (ans != '\n')
-          {
-            sentence += (char)ans;
-          }
-        }
-      }
-
-      int index = sentence.indexOf(',');
-      String check = sentence.substring(0, index);
-      if (check == "$GNGGA")
-      {
-        /// CheckSum Equation
-        int indexCheck = sentence.indexOf('*');
-        if (indexCheck != -1)
-        {
-          String checkSum = sentence.substring(1, indexCheck);
-          uint8_t temp = 0;
-          for (int i = 0; i < checkSum.length(); i++)
-          {
-            temp ^= checkSum.charAt(i);
-          }
-
-          String expectedStr = sentence.substring(indexCheck + 1);
-          expectedStr.trim();
-          uint8_t expected = (uint8_t)strtol(expectedStr.c_str(), NULL, 16);
-
-          if (temp != expected)
-          {
-            gpsData.valid = false;
-            Serial.printf("Checksum mismatch: calc=%02X expected=%02X sentence=%s\n", temp, expected, sentence.c_str());
-          }
-          else
-          {
-            gpsData.finalString = sentence;
-            gpsData.valid = true;
-          }
-        }
-      }
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
 
 void setup()
 {
   Serial.begin(115200);
-  Serial2.begin(38400, SERIAL_8N1, 16, 17);
   Wire.begin(21, 22);
   Serial.print("Connecting... :)\n\n");
 
@@ -540,72 +403,60 @@ void setup()
   readBmeCalibration();
 }
 
-long lastPrint = 0;
 void loop()
 {
   readMpu(mpuData);
   readBme(bmeData);
   readCompass(compassData);
-  readGPS(gpsData);
 
-  long now = millis();
-  if (now - lastPrint > 500) // instead of Delay of (500) I going with this strat. This will allow the gps to continue cycling the buffer rather then having to wait for the delay to finish.
+  if (mpuData.valid)
   {
-    if (mpuData.valid)
-    {
-      Serial.print("Accel (g): X=");
-      Serial.print(toUnits(mpuData.accelX, ACCEL_CONST));
-      Serial.print(" Y=");
-      Serial.print(toUnits(mpuData.accelY, ACCEL_CONST));
-      Serial.print(" Z=");
-      Serial.println(toUnits(mpuData.accelZ, ACCEL_CONST));
+    Serial.print("Accel (g): X=");
+    Serial.print(toUnits(mpuData.accelX, ACCEL_CONST));
+    Serial.print(" Y=");
+    Serial.print(toUnits(mpuData.accelY, ACCEL_CONST));
+    Serial.print(" Z=");
+    Serial.println(toUnits(mpuData.accelZ, ACCEL_CONST));
 
-      Serial.print("Gyro (deg/s): X=");
-      Serial.print(toUnits(mpuData.gyroX, GYRO_CONST));
-      Serial.print(" Y=");
-      Serial.print(toUnits(mpuData.gyroY, GYRO_CONST));
-      Serial.print(" Z=");
-      Serial.println(toUnits(mpuData.gyroZ, GYRO_CONST));
+    Serial.print("Gyro (deg/s): X=");
+    Serial.print(toUnits(mpuData.gyroX, GYRO_CONST));
+    Serial.print(" Y=");
+    Serial.print(toUnits(mpuData.gyroY, GYRO_CONST));
+    Serial.print(" Z=");
+    Serial.println(toUnits(mpuData.gyroZ, GYRO_CONST));
 
-      Serial.print("MPU Temp (C): ");
-      Serial.println(toUnits(mpuData.temp, TEMP_CONST) + TEMP_OFFSET);
-    }
-    else
-    {
-      Serial.println("MPU read failed");
-    }
-
-    if (bmeData.valid)
-    {
-      Serial.print("BME Temp (C): ");
-      Serial.println(bmeData.temperature);
-      Serial.print("BME Pressure (hPa): ");
-      Serial.println(bmeData.pressure);
-      Serial.print("BME Humidity (%RH): ");
-      Serial.println(bmeData.humidity);
-    }
-    else
-    {
-      Serial.println("BME read failed");
-    }
-
-    if (compassData.valid)
-    {
-      Serial.print("Heading (deg): ");
-      Serial.println(compassData.headingDegrees);
-    }
-    else
-    {
-      Serial.println("Compass read failed");
-    }
-
-    if (gpsData.valid)
-    {
-      displayGPS(gpsData.finalString);
-    }
-    else
-    {
-      Serial.println("GPS read failed");
-    }
+    Serial.print("MPU Temp (C): ");
+    Serial.println(toUnits(mpuData.temp, TEMP_CONST) + TEMP_OFFSET);
   }
+  else
+  {
+    Serial.println("MPU read failed");
+  }
+
+  if (bmeData.valid)
+  {
+    Serial.print("BME Temp (C): ");
+    Serial.println(bmeData.temperature);
+    Serial.print("BME Pressure (hPa): ");
+    Serial.println(bmeData.pressure);
+    Serial.print("BME Humidity (%RH): ");
+    Serial.println(bmeData.humidity);
+  }
+  else
+  {
+    Serial.println("BME read failed");
+  }
+
+  if (compassData.valid)
+  {
+    Serial.print("Heading (deg): ");
+    Serial.println(compassData.headingDegrees);
+  }
+  else
+  {
+    Serial.println("Compass read failed");
+  }
+
+  Serial.println();
+  delay(500);
 }
