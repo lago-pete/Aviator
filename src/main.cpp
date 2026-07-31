@@ -508,13 +508,13 @@ void readGPS(GPSData &data)
 
           if (temp != expected)
           {
-            gpsData.valid = false;
+            data.valid = false;
             Serial.printf("Checksum mismatch: calc=%02X expected=%02X sentence=%s\n", temp, expected, sentence.c_str());
           }
           else
           {
-            gpsData.finalString = sentence;
-            gpsData.valid = true;
+            data.finalString = sentence;
+            data.valid = true;
           }
         }
       }
