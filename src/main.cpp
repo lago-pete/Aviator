@@ -6,6 +6,24 @@ IPAddress laptopIP(172, 20, 10, 3);
 WiFiUDP udp;
 
 
+//Offset Graph
+// mpuData(15Bytes), BMEdata(17bytes), compData(11bytes), GPSReading(46bytes):
+// Total Telemetry Packet size = 89bytes 
+// [MPU 0-14] [BME 15-31] [COMP 32-42] [GPS 43-88]
+// Full Breakdown vv 
+// /Type	Bytes
+//  bool	1
+//  char	1
+//  int8_t	1
+//  int16_t	2
+//  int	4
+//  int32_t	4
+//  float	4
+//  double	8
+
+// Reference this if any mismatch^^^^^^^^^^
+
+
 
 
 struct __attribute__((packed)) MpuData
