@@ -684,7 +684,7 @@ void printDashboard(long now)
 void setup()
 {
   Serial.begin(115200);
-  WiFi.begin("GroundStationAP", "password");
+  WiFi.begin("Pete Phone", "Redsox34");
   udp.begin(3434); 
 
   while (WiFi.status() != WL_CONNECTED)
