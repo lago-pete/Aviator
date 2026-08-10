@@ -1,0 +1,144 @@
+#include <cstring>
+#include <iostream>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+using namespace std;
+
+int fd;
+struct sockaddr_in addr;
+bool setup();
+void loop();
+char buffer[100];
+struct sockaddr_in returnAddr;
+struct in_addr espIP;
+socklen_t addLen;
+
+
+struct __attribute__((packed)) MpuData
+{
+  int16_t accelX = 0, accelY = 0, accelZ = 0;
+  int16_t temp = 0;
+  int16_t gyroX = 0, gyroY = 0, gyroZ = 0;
+  bool valid = false;
+}__attribute__((packed));
+
+struct __attribute__((packed)) BmeData
+{
+  float temperature = 0;
+  float humidity = 0;
+  float pressure = 0;
+  float gasResistance = 0; // TODO: heater/gas-measurement sequence not implemented — no proven reference for this board
+  bool valid = false;
+}__attribute__((packed));
+
+struct __attribute__((packed))CompassData
+{
+  float headingDegrees = 0;
+  int16_t rawX = 0, rawY = 0, rawZ = 0;
+  bool valid = false;
+}__attribute__((packed));
+
+
+struct __attribute__((packed))GPSTime
+{
+  int hour;
+  int minute;
+  float sec;
+}__attribute__((packed));
+
+struct __attribute__((packed))GPSReading
+{
+  double lat;
+  double lon;
+  char latDir;
+  char lonDir;
+  int fixQual;
+  int satCount;
+  float hdop;
+  float altitude;
+  GPSTime time;
+}__attribute__((packed));
+struct __attribute__((packed)) TelemetryPacket{       // the attribute packed will remove the gaps that the compiler normally places as conveniance. Some data types like to be round numbers so the compiler will add space to push them into desired sizes.
+  MpuData sendMpu;
+  BmeData sendBme;
+  CompassData sendComp;
+  GPSReading sendGps;
+}__attribute__((packed));
+
+
+MpuData mpuData;
+BmeData bmeData;
+CompassData compassData;
+GPSReading gpsReading;
+TelemetryPacket packet;
+
+
+
+int main(){
+    int count = 1;
+    cout << "TelemetryPacket size: " << sizeof(TelemetryPacket) << "\n";
+    inet_pton(AF_INET, "10.42.0.89", &espIP);
+
+    while(!setup()){
+        cout << "Failed Setup...." << "\n";
+        if(count == 5){
+            cout << "Attempted setup() 5 Times with no Success..... Ending As Error No Connection" << "\n" ; 
+            return -1; 
+        }
+        cout << "Retrying Setup...." << "\n";
+        sleep (2);
+        count ++;
+    }
+    
+    while(1){
+        loop();
+    }
+}
+
+bool setup(){
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if(fd == -1){
+        cout << "Error Getting FD" << strerror(errno) <<  "\n" ;
+        return false;
+    }
+
+
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(3434);
+    addr.sin_addr.s_addr = INADDR_ANY;
+    int check = bind(fd, (struct sockaddr*) &addr, sizeof(addr));
+    if(check == -1){
+        cout << "Error Binding" << strerror(errno) <<  "\n" ;
+        close(fd);
+        return false;
+    }
+
+    return true;
+
+}
+
+void loop(){
+    addLen = sizeof(returnAddr);
+    int readBuff = recvfrom(fd,buffer, sizeof(buffer),0, (struct sockaddr*) &returnAddr, &addLen);
+    if(readBuff == -1){
+        cout << "Error Getting Data from Kernel" << strerror(errno) <<  "\n" ;
+        return;
+    }else if(readBuff != sizeof(TelemetryPacket)){
+        cout << "Incorrect message " << "\n" ;
+        return;
+    }
+    else if( returnAddr.sin_addr.s_addr != espIP.s_addr){
+        cout << "Incorrect IP " << "\n" ;
+        return;
+    }
+    else{
+
+        memcpy(&packet, buffer, sizeof(packet));
+        cout << " Quick Check: " << packet.sendMpu.accelX << "&" << packet.sendGps.satCount << "\n";
+        return;
+    }
+
+}

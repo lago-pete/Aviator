@@ -6,20 +6,20 @@ IPAddress piIP(10, 42, 0, 1);
 int port = 3434;
 WiFiUDP udp;
 
-// // Offset Graph
-// //  mpuData(15Bytes), BMEdata(17bytes), compData(11bytes), GPSReading(46bytes):
-// //  Total Telemetry Packet size = 89bytes
-// //  [MPU 0-14] [BME 15-31] [COMP 32-42] [GPS 43-88]
-// //  Full Breakdown vv
-// //  /Type	Bytes
-// //   bool	1
-// //   char	1
-// //   int8_t	1
-// //   int16_t	2
-// //   int	4
-// //   int32_t	4
-// //   float	4
-// //   double	8
+// Offset Graph
+//  mpuData(15Bytes), BMEdata(17bytes), compData(11bytes), GPSReading(46bytes):
+//  Total Telemetry Packet size = 89bytes
+//  [MPU 0-14] [BME 15-31] [COMP 32-42] [GPS 43-88]
+//  Full Breakdown vv
+//  /Type	Bytes
+//   bool	1
+//   char	1
+//   int8_t	1
+//   int16_t	2
+//   int	4
+//   int32_t	4
+//   float	4
+//   double	8
 
 // Reference this if any mismatch^^^^^^^^^^
 
@@ -674,7 +674,7 @@ void printDashboard(long now)
   Serial.println();
 }
 
-// // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 void setup()
 {
@@ -701,10 +701,7 @@ void setup()
                   WiFi.encryptionType(i));
   }
 
-  WiFi.begin("GroundStationAP", "peter123");
-
-  Serial.print("MAC Check for IP LOCK: ");
-  Serial.println(WiFi.macAddress());
+  WiFi.begin("GroundStationAP", "peter123",11);
 
   while (WiFi.status() != WL_CONNECTED)
   {
@@ -712,9 +709,6 @@ void setup()
     delay(1000);
     Serial.println(WiFi.status());
   }
-
-  
-
 
   Serial.println("connected!");
   Serial.println(WiFi.localIP());
