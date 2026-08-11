@@ -137,7 +137,41 @@ void loop(){
     else{
 
         memcpy(&packet, buffer, sizeof(packet));
-        cout << " Quick Check: " << packet.sendMpu.accelX << "&" << packet.sendGps.satCount << "\n";
+
+        cout << "--- MPU ---" << "\n";
+        cout << "Accel X: " << packet.sendMpu.accelX << "\n";
+        cout << "Accel Y: " << packet.sendMpu.accelY << "\n";
+        cout << "Accel Z: " << packet.sendMpu.accelZ << "\n";
+        cout << "Temp: " << packet.sendMpu.temp << "\n";
+        cout << "Gyro X: " << packet.sendMpu.gyroX << "\n";
+        cout << "Gyro Y: " << packet.sendMpu.gyroY << "\n";
+        cout << "Gyro Z: " << packet.sendMpu.gyroZ << "\n";
+        cout << "Valid: " << packet.sendMpu.valid << "\n";
+
+        cout << "--- BME ---" << "\n";
+        cout << "Temperature: " << packet.sendBme.temperature << "\n";
+        cout << "Humidity: " << packet.sendBme.humidity << "\n";
+        cout << "Pressure: " << packet.sendBme.pressure << "\n";
+        cout << "Gas Resistance: " << packet.sendBme.gasResistance << "\n";
+        cout << "Valid: " << packet.sendBme.valid << "\n";
+
+        cout << "--- Compass ---" << "\n";
+        cout << "Heading Degrees: " << packet.sendComp.headingDegrees << "\n";
+        cout << "Raw X: " << packet.sendComp.rawX << "\n";
+        cout << "Raw Y: " << packet.sendComp.rawY << "\n";
+        cout << "Raw Z: " << packet.sendComp.rawZ << "\n";
+        cout << "Valid: " << packet.sendComp.valid << "\n";
+
+        cout << "--- GPS ---" << "\n";
+        cout << "Lat: " << packet.sendGps.lat << " " << packet.sendGps.latDir << "\n";
+        cout << "Lon: " << packet.sendGps.lon << " " << packet.sendGps.lonDir << "\n";
+        cout << "Fix Quality: " << packet.sendGps.fixQual << "\n";
+        cout << "Sat Count: " << packet.sendGps.satCount << "\n";
+        cout << "HDOP: " << packet.sendGps.hdop << "\n";
+        cout << "Altitude: " << packet.sendGps.altitude << "\n";
+        cout << "Time: " << packet.sendGps.time.hour << ":" << packet.sendGps.time.minute << ":" << packet.sendGps.time.sec << "\n";
+
+        cout << "\n";
         return;
     }
 
