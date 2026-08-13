@@ -4,12 +4,19 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <fstream>
+#include <ctime>
+#include <string>
+#include <nlohmann/json.hpp>
 using namespace std;
+
+bool setup();
+void loop();
+void printDisplay();
+void printFile();
 
 int fd;
 struct sockaddr_in addr;
-bool setup();
-void loop();
 char buffer[100];
 struct sockaddr_in returnAddr;
 struct in_addr espIP;
@@ -59,7 +66,7 @@ struct __attribute__((packed)) GPSReading
     GPSTime time;
 } __attribute__((packed));
 struct __attribute__((packed)) TelemetryPacket
-{ // the attribute packed will remove the gaps that the compiler normally places as conveniance. Some data types like to be round numbers so the compiler will add space to push them into desired sizes.
+{ // the attribute packed will remove the padding that the compiler normally places as conveniance. Some data types like to be round numbers so the compiler will add space to push them into desired sizes.
     MpuData sendMpu;
     BmeData sendBme;
     CompassData sendComp;
@@ -72,6 +79,16 @@ CompassData compassData;
 GPSReading gpsReading;
 TelemetryPacket packet;
 GPSTime gpsTimeCheck;
+
+time_t now = time(nullptr);
+struct tm *localTime = localtime(&now);
+int year = localTime->tm_year + 1900;
+int month = localTime->tm_mon + 1;
+int day = localTime->tm_mday;
+int hour = localTime->tm_hour;
+int minute = localTime->tm_min;
+int second = localTime->tm_sec;
+ofstream myFile("FlightLogs/Log_" + to_string(year) + "-" + to_string(month) + "-" + to_string(day) + "-" + to_string(hour) + ":" + to_string(minute) + ":" + to_string(second) + ".jsonl");
 
 int main()
 {
@@ -125,7 +142,7 @@ bool setup()
 void loop()
 {
     addLen = sizeof(returnAddr);
-    
+
     int readBuff = recvfrom(fd, buffer, sizeof(buffer), 0, (struct sockaddr *)&returnAddr, &addLen);
     if (readBuff == -1)
     {
@@ -146,95 +163,195 @@ void loop()
     {
 
         memcpy(&packet, buffer, sizeof(packet));
-
-        if (!packet.sendMpu.valid)
+        printDisplay();
+        if (!myFile.is_open())
         {
-            cout << "!!!MPU Reading Not Valid!!! " << packet.sendMpu.accelX << "\n";
-            cout << "--- MPU ---" << "\n";
-            cout << "Accel X: " << "--------------------" << "\n";
-            cout << "Accel Y: " << "--------------------" << "\n";
-            cout << "Accel Z: " << "--------------------" << "\n";
-            cout << "Temp: " << "--------------------" << "\n";
-            cout << "Gyro X: " << "--------------------" << "\n";
-            cout << "Gyro Y: " << "--------------------" << "\n";
-            cout << "Gyro Z: " << "--------------------" << "\n";
-            cout << "Valid: " << "--------------------" << "\n";
+            cout << "FILE Can NOT BE OPENED!!!!!!!!" << "\n";
         }
         else
         {
-            cout << "--- MPU ---" << "\n";
-            cout << "Accel X: " << packet.sendMpu.accelX << "\n";
-            cout << "Accel Y: " << packet.sendMpu.accelY << "\n";
-            cout << "Accel Z: " << packet.sendMpu.accelZ << "\n";
-            cout << "Temp: " << packet.sendMpu.temp << "\n";
-            cout << "Gyro X: " << packet.sendMpu.gyroX << "\n";
-            cout << "Gyro Y: " << packet.sendMpu.gyroY << "\n";
-            cout << "Gyro Z: " << packet.sendMpu.gyroZ << "\n";
-            cout << "Valid: " << packet.sendMpu.valid << "\n";
-        }
-        if (!packet.sendBme.valid)
-        {
-            cout << "!!!!BME Reading Not Valid!!!!" << "\n";
-            cout << "Temperature: " << "--------------------" << "\n";
-            cout << "Humidity: " << "--------------------" << "\n";
-            cout << "Pressure: " << "--------------------" << "\n";
-            cout << "Gas Resistance: " << "--------------------" << "\n";
-            cout << "Valid: " << "--------------------" << "\n";
-        }
-        else
-        {
-            cout << "--- BME ---" << "\n";
-            cout << "Temperature: " << packet.sendBme.temperature << "\n";
-            cout << "Humidity: " << packet.sendBme.humidity << "\n";
-            cout << "Pressure: " << packet.sendBme.pressure << "\n";
-            cout << "Gas Resistance: " << packet.sendBme.gasResistance << "\n";
-            cout << "Valid: " << packet.sendBme.valid << "\n";
+            printFile();
         }
 
-        if (!packet.sendComp.valid)
-        {
-            cout << "!!!!Compass Reading Not Valid!!!!" << "\n";
-            cout << "Heading Degrees: " << "--------------------" << "\n";
-            cout << "Raw X: " << "--------------------" << "\n";
-            cout << "Raw Y: " << "--------------------" << "\n";
-            cout << "Raw Z: " << "--------------------" << "\n";
-            cout << "Valid: " << "--------------------" << "\n";
-        }
-        else
-        {
-            cout << "--- Compass ---" << "\n";
-            cout << "Heading Degrees: " << packet.sendComp.headingDegrees << "\n";
-            cout << "Raw X: " << packet.sendComp.rawX << "\n";
-            cout << "Raw Y: " << packet.sendComp.rawY << "\n";
-            cout << "Raw Z: " << packet.sendComp.rawZ << "\n";
-            cout << "Valid: " << packet.sendComp.valid << "\n";
-        }
-
-        if (packet.sendGps.time.hour == gpsTimeCheck.hour && packet.sendGps.time.minute == gpsTimeCheck.minute && packet.sendGps.time.sec == gpsTimeCheck.sec)
-        {
-            cout << "!!!!GPS Reading Not Valid!!!!" << "\n";
-            cout << "Lat: " << "--------------------" << " " << "--------------------" << "\n";
-            cout << "Lon: " << "--------------------" << " " << "--------------------" << "\n";
-            cout << "Fix Quality: " << "--------------------" << "\n";
-            cout << "Sat Count: " << "--------------------" << "\n";
-            cout << "HDOP: " << "--------------------" << "\n";
-            cout << "Altitude: " << "--------------------" << "\n";
-            cout << "Time: " << packet.sendGps.time.hour << ":" << packet.sendGps.time.minute << ":" << packet.sendGps.time.sec << "\n";
-        }
-        else
-        {
-            cout << "--- GPS ---" << "\n";
-            cout << "Lat: " << packet.sendGps.lat << " " << packet.sendGps.latDir << "\n";
-            cout << "Lon: " << packet.sendGps.lon << " " << packet.sendGps.lonDir << "\n";
-            cout << "Fix Quality: " << packet.sendGps.fixQual << "\n";
-            cout << "Sat Count: " << packet.sendGps.satCount << "\n";
-            cout << "HDOP: " << packet.sendGps.hdop << "\n";
-            cout << "Altitude: " << packet.sendGps.altitude << "\n";
-            cout << "Time: " << packet.sendGps.time.hour << ":" << packet.sendGps.time.minute << ":" << packet.sendGps.time.sec << "\n";
-            gpsTimeCheck = packet.sendGps.time;
-        }
-
-        cout << "\n";
         return;
     }
+}
+
+void printFile()
+{
+    json j;
+
+    if (!packet.sendMpu.valid)
+    {
+        j["mpu"] = {{"valid", false}};
+    }
+    else
+    {
+        j["mpu"] = {
+            {"valid", true},
+            {"accelX", packet.sendMpu.accelX},
+            {"accelY", packet.sendMpu.accelY},
+            {"accelZ", packet.sendMpu.accelZ},
+            {"temp", packet.sendMpu.temp},
+            {"gyroX", packet.sendMpu.gyroX},
+            {"gyroY", packet.sendMpu.gyroY},
+            {"gyroZ", packet.sendMpu.gyroZ},
+        };
+    }
+
+    if (!packet.sendBme.valid)
+    {
+        j["bme"] = {{"valid", false}};
+    }
+    else
+    {
+        j["bme"] = {
+            {"valid", true},
+            {"temperature", packet.sendBme.temperature},
+            {"humidity", packet.sendBme.humidity},
+            {"pressure", packet.sendBme.pressure},
+            {"gasResistance", packet.sendBme.gasResistance},
+        };
+    }
+
+    if (!packet.sendComp.valid)
+    {
+        j["compass"] = {{"valid", false}};
+    }
+    else
+    {
+        j["compass"] = {
+            {"valid", true},
+            {"headingDegrees", packet.sendComp.headingDegrees},
+            {"rawX", packet.sendComp.rawX},
+            {"rawY", packet.sendComp.rawY},
+            {"rawZ", packet.sendComp.rawZ},
+        };
+    }
+
+    bool gpsValid = !(packet.sendGps.time.hour == gpsTimeCheck.hour && packet.sendGps.time.minute == gpsTimeCheck.minute && packet.sendGps.time.sec == gpsTimeCheck.sec);
+    if (!gpsValid)
+    {
+        j["gps"] = {
+            {"valid", false},
+            {"time", {
+                         {"hour", packet.sendGps.time.hour},
+                         {"minute", packet.sendGps.time.minute},
+                         {"sec", packet.sendGps.time.sec},
+                     }},
+        };
+    }
+    else
+    {
+        j["gps"] = {
+            {"valid", true},
+            {"lat", packet.sendGps.lat},
+            {"latDir", string(1, packet.sendGps.latDir)},
+            {"lon", packet.sendGps.lon},
+            {"lonDir", string(1, packet.sendGps.lonDir)},
+            {"fixQuality", packet.sendGps.fixQual},
+            {"satCount", packet.sendGps.satCount},
+            {"hdop", packet.sendGps.hdop},
+            {"altitude", packet.sendGps.altitude},
+            {"time", {
+                         {"hour", packet.sendGps.time.hour},
+                         {"minute", packet.sendGps.time.minute},
+                         {"sec", packet.sendGps.time.sec},
+                     }},
+        };
+        gpsTimeCheck = packet.sendGps.time;
+    }
+
+    myFile << j.dump() << "\n";
+}
+void printDisplay()
+{
+    if (!packet.sendMpu.valid)
+    {
+        cout << "!!!MPU Reading Not Valid!!! " << packet.sendMpu.accelX << "\n";
+        cout << "--- MPU ---" << "\n";
+        cout << "Accel X: " << "--------------------" << "\n";
+        cout << "Accel Y: " << "--------------------" << "\n";
+        cout << "Accel Z: " << "--------------------" << "\n";
+        cout << "Temp: " << "--------------------" << "\n";
+        cout << "Gyro X: " << "--------------------" << "\n";
+        cout << "Gyro Y: " << "--------------------" << "\n";
+        cout << "Gyro Z: " << "--------------------" << "\n";
+        cout << "Valid: " << "--------------------" << "\n";
+    }
+    else
+    {
+        cout << "--- MPU ---" << "\n";
+        cout << "Accel X: " << packet.sendMpu.accelX << "\n";
+        cout << "Accel Y: " << packet.sendMpu.accelY << "\n";
+        cout << "Accel Z: " << packet.sendMpu.accelZ << "\n";
+        cout << "Temp: " << packet.sendMpu.temp << "\n";
+        cout << "Gyro X: " << packet.sendMpu.gyroX << "\n";
+        cout << "Gyro Y: " << packet.sendMpu.gyroY << "\n";
+        cout << "Gyro Z: " << packet.sendMpu.gyroZ << "\n";
+        cout << "Valid: " << packet.sendMpu.valid << "\n";
+    }
+    if (!packet.sendBme.valid)
+    {
+        cout << "!!!!BME Reading Not Valid!!!!" << "\n";
+        cout << "Temperature: " << "--------------------" << "\n";
+        cout << "Humidity: " << "--------------------" << "\n";
+        cout << "Pressure: " << "--------------------" << "\n";
+        cout << "Gas Resistance: " << "--------------------" << "\n";
+        cout << "Valid: " << "--------------------" << "\n";
+    }
+    else
+    {
+        cout << "--- BME ---" << "\n";
+        cout << "Temperature: " << packet.sendBme.temperature << "\n";
+        cout << "Humidity: " << packet.sendBme.humidity << "\n";
+        cout << "Pressure: " << packet.sendBme.pressure << "\n";
+        cout << "Gas Resistance: " << packet.sendBme.gasResistance << "\n";
+        cout << "Valid: " << packet.sendBme.valid << "\n";
+    }
+
+    if (!packet.sendComp.valid)
+    {
+        cout << "!!!!Compass Reading Not Valid!!!!" << "\n";
+        cout << "Heading Degrees: " << "--------------------" << "\n";
+        cout << "Raw X: " << "--------------------" << "\n";
+        cout << "Raw Y: " << "--------------------" << "\n";
+        cout << "Raw Z: " << "--------------------" << "\n";
+        cout << "Valid: " << "--------------------" << "\n";
+    }
+    else
+    {
+        cout << "--- Compass ---" << "\n";
+        cout << "Heading Degrees: " << packet.sendComp.headingDegrees << "\n";
+        cout << "Raw X: " << packet.sendComp.rawX << "\n";
+        cout << "Raw Y: " << packet.sendComp.rawY << "\n";
+        cout << "Raw Z: " << packet.sendComp.rawZ << "\n";
+        cout << "Valid: " << packet.sendComp.valid << "\n";
+    }
+
+    if (packet.sendGps.time.hour == gpsTimeCheck.hour && packet.sendGps.time.minute == gpsTimeCheck.minute && packet.sendGps.time.sec == gpsTimeCheck.sec)
+    {
+        cout << "!!!!GPS Reading Not Valid!!!!" << "\n";
+        cout << "Lat: " << "--------------------" << " " << "--------------------" << "\n";
+        cout << "Lon: " << "--------------------" << " " << "--------------------" << "\n";
+        cout << "Fix Quality: " << "--------------------" << "\n";
+        cout << "Sat Count: " << "--------------------" << "\n";
+        cout << "HDOP: " << "--------------------" << "\n";
+        cout << "Altitude: " << "--------------------" << "\n";
+        cout << "Time: " << packet.sendGps.time.hour << ":" << packet.sendGps.time.minute << ":" << packet.sendGps.time.sec << "\n";
+    }
+    else
+    {
+        cout << "--- GPS ---" << "\n";
+        cout << "Lat: " << packet.sendGps.lat << " " << packet.sendGps.latDir << "\n";
+        cout << "Lon: " << packet.sendGps.lon << " " << packet.sendGps.lonDir << "\n";
+        cout << "Fix Quality: " << packet.sendGps.fixQual << "\n";
+        cout << "Sat Count: " << packet.sendGps.satCount << "\n";
+        cout << "HDOP: " << packet.sendGps.hdop << "\n";
+        cout << "Altitude: " << packet.sendGps.altitude << "\n";
+        cout << "Time: " << packet.sendGps.time.hour << ":" << packet.sendGps.time.minute << ":" << packet.sendGps.time.sec << "\n";
+        gpsTimeCheck = packet.sendGps.time;
+    }
+
+    cout << "\n";
 }
