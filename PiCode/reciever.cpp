@@ -5,9 +5,9 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <fstream>
+#include <sstream>
 #include <ctime>
 #include <string>
-#include <nlohmann/json.hpp>
 using namespace std;
 
 bool setup();
@@ -179,90 +179,108 @@ void loop()
 
 void printFile()
 {
-    json j;
+    ostringstream j;
+    j << "{";
 
     if (!packet.sendMpu.valid)
     {
-        j["mpu"] = {{"valid", false}};
+        j << "\"mpu\":{\"valid\":false}";
     }
     else
     {
-        j["mpu"] = {
-            {"valid", true},
-            {"accelX", packet.sendMpu.accelX},
-            {"accelY", packet.sendMpu.accelY},
-            {"accelZ", packet.sendMpu.accelZ},
-            {"temp", packet.sendMpu.temp},
-            {"gyroX", packet.sendMpu.gyroX},
-            {"gyroY", packet.sendMpu.gyroY},
-            {"gyroZ", packet.sendMpu.gyroZ},
-        };
+        j << "\"mpu\":{"
+          << "\"valid\":true,"
+          << "\"accelX\":" << (int16_t)packet.sendMpu.accelX << ","
+          << "\"accelY\":" << (int16_t)packet.sendMpu.accelY << ","
+          << "\"accelZ\":" << (int16_t)packet.sendMpu.accelZ << ","
+          << "\"temp\":" << (int16_t)packet.sendMpu.temp << ","
+          << "\"gyroX\":" << (int16_t)packet.sendMpu.gyroX << ","
+          << "\"gyroY\":" << (int16_t)packet.sendMpu.gyroY << ","
+          << "\"gyroZ\":" << (int16_t)packet.sendMpu.gyroZ
+          << "}";
     }
+    j << ",";
 
     if (!packet.sendBme.valid)
     {
-        j["bme"] = {{"valid", false}};
+        j << "\"bme\":{\"valid\":false}";
     }
     else
     {
-        j["bme"] = {
-            {"valid", true},
-            {"temperature", packet.sendBme.temperature},
-            {"humidity", packet.sendBme.humidity},
-            {"pressure", packet.sendBme.pressure},
-            {"gasResistance", packet.sendBme.gasResistance},
-        };
+        j << "\"bme\":{"
+          << "\"valid\":true,"
+          << "\"temperature\":" << (float)packet.sendBme.temperature << ","
+          << "\"humidity\":" << (float)packet.sendBme.humidity << ","
+          << "\"pressure\":" << (float)packet.sendBme.pressure << ","
+          << "\"gasResistance\":" << (float)packet.sendBme.gasResistance
+          << "}";
     }
+    j << ",";
 
     if (!packet.sendComp.valid)
     {
-        j["compass"] = {{"valid", false}};
+        j << "\"compass\":{\"valid\":false}";
     }
     else
     {
-        j["compass"] = {
-            {"valid", true},
-            {"headingDegrees", packet.sendComp.headingDegrees},
-            {"rawX", packet.sendComp.rawX},
-            {"rawY", packet.sendComp.rawY},
-            {"rawZ", packet.sendComp.rawZ},
-        };
+        j << "\"compass\":{"
+          << "\"valid\":true,"
+          << "\"headingDegrees\":" << (float)packet.sendComp.headingDegrees << ","
+          << "\"rawX\":" << (int16_t)packet.sendComp.rawX << ","
+          << "\"rawY\":" << (int16_t)packet.sendComp.rawY << ","
+          << "\"rawZ\":" << (int16_t)packet.sendComp.rawZ
+          << "}";
     }
+    j << ",";
 
-    bool gpsValid = !(packet.sendGps.time.hour == gpsTimeCheck.hour && packet.sendGps.time.minute == gpsTimeCheck.minute && packet.sendGps.time.sec == gpsTimeCheck.sec);
+    int gpsHour = packet.sendGps.time.hour;
+    int gpsMinute = packet.sendGps.time.minute;
+    float gpsSec = packet.sendGps.time.sec;
+    bool gpsValid = !(gpsHour == gpsTimeCheck.hour && gpsMinute == gpsTimeCheck.minute && gpsSec == gpsTimeCheck.sec);
     if (!gpsValid)
     {
-        j["gps"] = {
-            {"valid", false},
-            {"time", {
-                         {"hour", packet.sendGps.time.hour},
-                         {"minute", packet.sendGps.time.minute},
-                         {"sec", packet.sendGps.time.sec},
-                     }},
-        };
+        j << "\"gps\":{"
+          << "\"valid\":false,"
+          << "\"time\":{"
+          << "\"hour\":" << gpsHour << ","
+          << "\"minute\":" << gpsMinute << ","
+          << "\"sec\":" << gpsSec
+          << "}"
+          << "}";
     }
     else
     {
-        j["gps"] = {
-            {"valid", true},
-            {"lat", packet.sendGps.lat},
-            {"latDir", string(1, packet.sendGps.latDir)},
-            {"lon", packet.sendGps.lon},
-            {"lonDir", string(1, packet.sendGps.lonDir)},
-            {"fixQuality", packet.sendGps.fixQual},
-            {"satCount", packet.sendGps.satCount},
-            {"hdop", packet.sendGps.hdop},
-            {"altitude", packet.sendGps.altitude},
-            {"time", {
-                         {"hour", packet.sendGps.time.hour},
-                         {"minute", packet.sendGps.time.minute},
-                         {"sec", packet.sendGps.time.sec},
-                     }},
-        };
+        double gpsLat = packet.sendGps.lat;
+        double gpsLon = packet.sendGps.lon;
+        char gpsLatDir = packet.sendGps.latDir;
+        char gpsLonDir = packet.sendGps.lonDir;
+        int gpsFixQual = packet.sendGps.fixQual;
+        int gpsSatCount = packet.sendGps.satCount;
+        float gpsHdop = packet.sendGps.hdop;
+        float gpsAltitude = packet.sendGps.altitude;
+
+        j << "\"gps\":{"
+          << "\"valid\":true,"
+          << "\"lat\":" << gpsLat << ","
+          << "\"latDir\":\"" << gpsLatDir << "\","
+          << "\"lon\":" << gpsLon << ","
+          << "\"lonDir\":\"" << gpsLonDir << "\","
+          << "\"fixQuality\":" << gpsFixQual << ","
+          << "\"satCount\":" << gpsSatCount << ","
+          << "\"hdop\":" << gpsHdop << ","
+          << "\"altitude\":" << gpsAltitude << ","
+          << "\"time\":{"
+          << "\"hour\":" << gpsHour << ","
+          << "\"minute\":" << gpsMinute << ","
+          << "\"sec\":" << gpsSec
+          << "}"
+          << "}";
         gpsTimeCheck = packet.sendGps.time;
     }
 
-    myFile << j.dump() << "\n";
+    j << "}";
+
+    myFile << j.str() << "\n";
 }
 void printDisplay()
 {
