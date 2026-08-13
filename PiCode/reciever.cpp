@@ -8,6 +8,7 @@
 #include <sstream>
 #include <ctime>
 #include <string>
+#include <iomanip> // need this cause im losing the last 2 digits of lat and lon
 using namespace std;
 
 bool setup();
@@ -180,8 +181,8 @@ void loop()
 void printFile()
 {
     ostringstream j;
+    j << std::setprecision(8);  // ok apparently this is something caleld sticky and it applied to the rest of the calls, so when I was palcing it over and over it wasnt liking it. 
     j << "{";
-
     if (!packet.sendMpu.valid)
     {
         j << "\"mpu\":{\"valid\":false}";
