@@ -11,22 +11,25 @@
 #include <iomanip> // need this cause im losing the last 2 digits of lat and lon
 #include <vector>
 #include <algorithm>
+#include <websocketpp/config/asio_no_tls.hpp>
+#include <websocketpp/server.hpp>
 using namespace std;
 
+typedef websocketpp::server<websocketpp::config::asio> server_t;
 bool setup();
 void loop();
 void printDisplay();
 void printFile();
 
 int udp_fd;
-int listener_fd;
-vector<int> client_fds;
+
 struct sockaddr_in addr;
 char buffer[100];
 struct sockaddr_in returnAddr;
 struct in_addr espIP;
 socklen_t addLen;
 timeval timeout;
+server_t ws_server;
 
 struct __attribute__((packed)) MpuData
 {
@@ -97,6 +100,21 @@ int second = localTime->tm_sec;
 ofstream myFile("FlightLogs/Log_" + to_string(year) + "-" + to_string(month) + "-" + to_string(day) + "-" + to_string(hour) + ":" + to_string(minute) + ":" + to_string(second) + ".jsonl");
 fd_set set;
 
+void on_open(websocketpp::connection_hdl hdl)
+{
+    cout << "Client connected" << "\n";
+}
+
+void on_close(websocketpp::connection_hdl hdl)
+{
+    cout << "Client disconnected" << "\n";
+}
+
+void on_message(websocketpp::connection_hdl hdl, server_t::message_ptr msg)
+{
+    cout << "Message received" << "\n";
+}
+
 int main()
 {
     int count = 1;
@@ -145,32 +163,14 @@ bool setup()
     }
     FD_SET(udp_fd, &set);
 
-    listener_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (listener_fd == -1)
-    {
-        cout << "Error Getting Listener FD" << strerror(errno) << "\n";
-        return false;
-    }
+    ws_server.init_asio();
 
-    struct sockaddr_in tcpAddr;
-    tcpAddr.sin_family = AF_INET;
-    tcpAddr.sin_port = htons(3435);
-    tcpAddr.sin_addr.s_addr = INADDR_ANY;
-    int tcpCheck = bind(listener_fd, (struct sockaddr *)&tcpAddr, sizeof(tcpAddr));
-    if (tcpCheck == -1)
-    {
-        cout << "Error Binding Listener" << strerror(errno) << "\n";
-        close(listener_fd);
-        return false;
-    }
+    ws_server.set_open_handler(on_open);
+    ws_server.set_close_handler(on_close);
+    ws_server.set_message_handler(on_message);
 
-    if (listen(listener_fd, 5) == -1)
-    {
-        cout << "Error Listening" << strerror(errno) << "\n";
-        close(listener_fd);
-        return false;
-    }
-    FD_SET(listener_fd, &set);
+    ws_server.listen(8080);
+    ws_server.start_accept();
 
     return true;
 }
@@ -180,31 +180,13 @@ void loop()
     addLen = sizeof(returnAddr);
     fd_set copy = set;
 
-    int maxFd = max(udp_fd, listener_fd);
-    for (int clientFd : client_fds)
-    {
-        maxFd = max(maxFd, clientFd);
-    }
+    int maxFd = udp_fd;
 
     int result = select(maxFd + 1, &copy, nullptr, nullptr, &timeout);
 
-    if (result == 0){
-        cout << "[IDLE]...." << "\n";
-    }
-
-    if (result > 0 && FD_ISSET(listener_fd, &copy))
+    if (result == 0)
     {
-        int client_fd = accept(listener_fd, nullptr, nullptr);
-        if (client_fd == -1)
-        {
-            cout << "Error Accepting Client" << strerror(errno) << "\n";
-        }
-        else
-        {
-            client_fds.push_back(client_fd);
-            FD_SET(client_fd, &set);
-            cout << "New Client Connected: " << client_fd << "\n";
-        }
+        cout << "[IDLE]...." << "\n";
     }
 
     if (result > 0 && FD_ISSET(udp_fd, &copy))
@@ -237,30 +219,7 @@ void loop()
         }
     }
 
-    if (result > 0)
-    {
-        for (auto it = client_fds.begin(); it != client_fds.end();)
-        {
-            int clientFd = *it;
-            if (FD_ISSET(clientFd, &copy))
-            {
-                char clientBuffer[512];
-                int readBuff = recv(clientFd, clientBuffer, sizeof(clientBuffer), 0);
-                if (readBuff <= 0)
-                {
-                    cout << "Client Disconnected: " << clientFd << "\n";
-                    FD_CLR(clientFd, &set);
-                    close(clientFd);
-                    it = client_fds.erase(it);
-                    continue;
-                }
-            }
-            ++it;
-        }
-    }
-
-
-
+    ws_server.poll_one();
 }
 
 void printFile()
