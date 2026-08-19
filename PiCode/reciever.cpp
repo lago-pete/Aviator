@@ -9,6 +9,8 @@
 #include <ctime>
 #include <string>
 #include <iomanip> // need this cause im losing the last 2 digits of lat and lon
+#include <vector>
+#include <algorithm>
 using namespace std;
 
 bool setup();
@@ -16,12 +18,15 @@ void loop();
 void printDisplay();
 void printFile();
 
-int fd;
+int udp_fd;
+int listener_fd;
+vector<int> client_fds;
 struct sockaddr_in addr;
 char buffer[100];
 struct sockaddr_in returnAddr;
 struct in_addr espIP;
 socklen_t addLen;
+timeval timeout;
 
 struct __attribute__((packed)) MpuData
 {
@@ -90,10 +95,12 @@ int hour = localTime->tm_hour;
 int minute = localTime->tm_min;
 int second = localTime->tm_sec;
 ofstream myFile("FlightLogs/Log_" + to_string(year) + "-" + to_string(month) + "-" + to_string(day) + "-" + to_string(hour) + ":" + to_string(minute) + ":" + to_string(second) + ".jsonl");
+fd_set set;
 
 int main()
 {
     int count = 1;
+    timeout.tv_sec = 1;
     cout << "TelemetryPacket size: " << sizeof(TelemetryPacket) << "\n";
     inet_pton(AF_INET, "10.42.0.89", &espIP);
 
@@ -118,9 +125,9 @@ int main()
 
 bool setup()
 {
-    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
 
-    if (fd == -1)
+    if (udp_fd == -1)
     {
         cout << "Error Getting FD" << strerror(errno) << "\n";
         return false;
@@ -129,13 +136,41 @@ bool setup()
     addr.sin_family = AF_INET;
     addr.sin_port = htons(3434);
     addr.sin_addr.s_addr = INADDR_ANY;
-    int check = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+    int check = bind(udp_fd, (struct sockaddr *)&addr, sizeof(addr));
     if (check == -1)
     {
         cout << "Error Binding" << strerror(errno) << "\n";
-        close(fd);
+        close(udp_fd);
         return false;
     }
+    FD_SET(udp_fd, &set);
+
+    listener_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listener_fd == -1)
+    {
+        cout << "Error Getting Listener FD" << strerror(errno) << "\n";
+        return false;
+    }
+
+    struct sockaddr_in tcpAddr;
+    tcpAddr.sin_family = AF_INET;
+    tcpAddr.sin_port = htons(3435);
+    tcpAddr.sin_addr.s_addr = INADDR_ANY;
+    int tcpCheck = bind(listener_fd, (struct sockaddr *)&tcpAddr, sizeof(tcpAddr));
+    if (tcpCheck == -1)
+    {
+        cout << "Error Binding Listener" << strerror(errno) << "\n";
+        close(listener_fd);
+        return false;
+    }
+
+    if (listen(listener_fd, 5) == -1)
+    {
+        cout << "Error Listening" << strerror(errno) << "\n";
+        close(listener_fd);
+        return false;
+    }
+    FD_SET(listener_fd, &set);
 
     return true;
 }
@@ -143,45 +178,95 @@ bool setup()
 void loop()
 {
     addLen = sizeof(returnAddr);
+    fd_set copy = set;
 
-    int readBuff = recvfrom(fd, buffer, sizeof(buffer), 0, (struct sockaddr *)&returnAddr, &addLen);
-    if (readBuff == -1)
+    int maxFd = max(udp_fd, listener_fd);
+    for (int clientFd : client_fds)
     {
-        cout << "Error Getting Data from Kernel" << strerror(errno) << "\n";
-        return;
+        maxFd = max(maxFd, clientFd);
     }
-    else if (readBuff != sizeof(TelemetryPacket))
-    {
-        cout << "Incorrect message " << "\n";
-        return;
-    }
-    else if (returnAddr.sin_addr.s_addr != espIP.s_addr)
-    {
-        cout << "Incorrect IP " << "\n";
-        return;
-    }
-    else
-    {
 
-        memcpy(&packet, buffer, sizeof(packet));
-        printDisplay();
-        if (!myFile.is_open())
+    int result = select(maxFd + 1, &copy, nullptr, nullptr, &timeout);
+
+    if (result == 0){
+        cout << "[IDLE]...." << "\n";
+    }
+
+    if (result > 0 && FD_ISSET(listener_fd, &copy))
+    {
+        int client_fd = accept(listener_fd, nullptr, nullptr);
+        if (client_fd == -1)
         {
-            cout << "FILE Can NOT BE OPENED!!!!!!!!" << "\n";
+            cout << "Error Accepting Client" << strerror(errno) << "\n";
         }
         else
         {
-            printFile();
+            client_fds.push_back(client_fd);
+            FD_SET(client_fd, &set);
+            cout << "New Client Connected: " << client_fd << "\n";
         }
-
-        return;
     }
+
+    if (result > 0 && FD_ISSET(udp_fd, &copy))
+    {
+        int readBuff = recvfrom(udp_fd, buffer, sizeof(buffer), 0, (struct sockaddr *)&returnAddr, &addLen);
+        if (readBuff == -1)
+        {
+            cout << "Error Getting Data from Kernel" << strerror(errno) << "\n";
+        }
+        else if (readBuff != sizeof(TelemetryPacket))
+        {
+            cout << "Incorrect message " << "\n";
+        }
+        else if (returnAddr.sin_addr.s_addr != espIP.s_addr)
+        {
+            cout << "Incorrect IP " << "\n";
+        }
+        else
+        {
+            memcpy(&packet, buffer, sizeof(packet));
+            printDisplay();
+            if (!myFile.is_open())
+            {
+                cout << "FILE Can NOT BE OPENED!!!!!!!!" << "\n";
+            }
+            else
+            {
+                printFile();
+            }
+        }
+    }
+
+    if (result > 0)
+    {
+        for (auto it = client_fds.begin(); it != client_fds.end();)
+        {
+            int clientFd = *it;
+            if (FD_ISSET(clientFd, &copy))
+            {
+                char clientBuffer[512];
+                int readBuff = recv(clientFd, clientBuffer, sizeof(clientBuffer), 0);
+                if (readBuff <= 0)
+                {
+                    cout << "Client Disconnected: " << clientFd << "\n";
+                    FD_CLR(clientFd, &set);
+                    close(clientFd);
+                    it = client_fds.erase(it);
+                    continue;
+                }
+            }
+            ++it;
+        }
+    }
+
+
+
 }
 
 void printFile()
 {
     ostringstream j;
-    j << std::setprecision(8);  // ok apparently this is something caleld sticky and it applied to the rest of the calls, so when I was palcing it over and over it wasnt liking it. 
+    j << std::setprecision(8); // ok apparently this is something called sticky and it applied to the rest of the calls, so when I was palcing it over and over it wasnt liking it.
     j << "{";
     if (!packet.sendMpu.valid)
     {
