@@ -595,7 +595,7 @@ void runDeviceCheck()
   Serial.println("  GPS        (UART): listening on Serial2");
   printDivider('=');
   Serial.println();
-  delay(2000);
+  delay(4000);
 }
 
 // ---------------------------------------------------------------------------

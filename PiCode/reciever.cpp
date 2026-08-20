@@ -44,7 +44,7 @@ struct __attribute__((packed)) BmeData
     float temperature = 0;
     float humidity = 0;
     float pressure = 0;
-    float gasResistance = 0; // TODO: heater/gas-measurement sequence not implemented — no proven reference for this board
+    float gasResistance = 0; 
     bool valid = false;
 } __attribute__((packed));
 
@@ -54,14 +54,12 @@ struct __attribute__((packed)) CompassData
     int16_t rawX = 0, rawY = 0, rawZ = 0;
     bool valid = false;
 } __attribute__((packed));
-
 struct __attribute__((packed)) GPSTime
 {
     int hour;
     int minute;
     float sec;
 } __attribute__((packed));
-
 struct __attribute__((packed)) GPSReading
 {
     double lat;
@@ -75,7 +73,7 @@ struct __attribute__((packed)) GPSReading
     GPSTime time;
 } __attribute__((packed));
 struct __attribute__((packed)) TelemetryPacket
-{ // the attribute packed will remove the padding that the compiler normally places as conveniance. Some data types like to be round numbers so the compiler will add space to push them into desired sizes.
+{ 
     MpuData sendMpu;
     BmeData sendBme;
     CompassData sendComp;
@@ -118,7 +116,6 @@ void on_message(websocketpp::connection_hdl hdl, server_t::message_ptr msg)
 int main()
 {
     int count = 1;
-    timeout.tv_sec = 1;
     cout << "TelemetryPacket size: " << sizeof(TelemetryPacket) << "\n";
     inet_pton(AF_INET, "10.42.0.89", &espIP);
 
@@ -144,12 +141,16 @@ int main()
 bool setup()
 {
     udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    
+
 
     if (udp_fd == -1)
     {
         cout << "Error Getting FD" << strerror(errno) << "\n";
         return false;
     }
+
+    fcntl(udp_fd, F_SETFL, O_NONBLOCK);
 
     addr.sin_family = AF_INET;
     addr.sin_port = htons(3434);
@@ -179,6 +180,8 @@ void loop()
 {
     addLen = sizeof(returnAddr);
     fd_set copy = set;
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
 
     int maxFd = udp_fd;
 
