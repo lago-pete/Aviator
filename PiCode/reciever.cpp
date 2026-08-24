@@ -105,7 +105,7 @@ void on_open(websocketpp::connection_hdl hdl)
 }
 void on_close(websocketpp::connection_hdl hdl)
 {
-    clients.erase(hdl)
+    clients.erase(hdl);
     cout << "Client disconnected" << "\n";
     cout<< "Total Clients: " << clients.size() << "\n";
 
