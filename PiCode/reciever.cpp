@@ -11,6 +11,7 @@
 #include <iomanip> // need this cause im losing the last 2 digits of lat and lon
 #include <vector>
 #include <algorithm>
+#include <set>
 #include <websocketpp/config/asio_no_tls.hpp>
 #include <websocketpp/server.hpp>
 using namespace std;
@@ -43,7 +44,7 @@ struct __attribute__((packed)) BmeData
     float temperature = 0;
     float humidity = 0;
     float pressure = 0;
-    float gasResistance = 0; 
+    float gasResistance = 0;
     bool valid = false;
 } __attribute__((packed));
 struct __attribute__((packed)) CompassData
@@ -71,7 +72,7 @@ struct __attribute__((packed)) GPSReading
     GPSTime time;
 } __attribute__((packed));
 struct __attribute__((packed)) TelemetryPacket
-{ 
+{
     MpuData sendMpu;
     BmeData sendBme;
     CompassData sendComp;
@@ -101,14 +102,13 @@ void on_open(websocketpp::connection_hdl hdl)
 {
     clients.insert(hdl);
     cout << "Client connected" << "\n";
-    cout<< "Total Clients: " << clients.size() << "\n";
+    cout << "Total Clients: " << clients.size() << "\n";
 }
 void on_close(websocketpp::connection_hdl hdl)
 {
     clients.erase(hdl);
     cout << "Client disconnected" << "\n";
-    cout<< "Total Clients: " << clients.size() << "\n";
-
+    cout << "Total Clients: " << clients.size() << "\n";
 }
 void on_message(websocketpp::connection_hdl hdl, server_t::message_ptr msg)
 {
@@ -143,13 +143,13 @@ bool setup()
 
     ////UDP SETUP
     udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    
+
     if (udp_fd == -1)
     {
         cout << "Error Getting FD" << strerror(errno) << "\n";
         return false;
     }
-    fcntl(udp_fd, F_SETFL, O_NONBLOCK); // This is a call to make the certain fd non blocking. We do this because if we call recvfrom() and there is no data yet it will pause and wait for that data. However since we have multiple things going on we want to make sure that it will return rather then waiting so others can run. 
+    fcntl(udp_fd, F_SETFL, O_NONBLOCK); // This is a call to make the certain fd non blocking. We do this because if we call recvfrom() and there is no data yet it will pause and wait for that data. However since we have multiple things going on we want to make sure that it will return rather then waiting so others can run.
     addr.sin_family = AF_INET;
     addr.sin_port = htons(3434);
     addr.sin_addr.s_addr = INADDR_ANY;
@@ -163,16 +163,13 @@ bool setup()
     FD_SET(udp_fd, &udpSet);
     /////
 
-
-
-    ///Websocket Setup
+    /// Websocket Setup
     ws_server.init_asio();
     ws_server.set_open_handler(on_open);
     ws_server.set_close_handler(on_close);
     ws_server.set_message_handler(on_message);
     ws_server.listen(8080);
     ws_server.start_accept();
-
 
     return true;
 }
@@ -185,7 +182,7 @@ void loop()
 
     int maxFd = udp_fd;
 
-    int result = select(maxFd + 1, &copy, nullptr, nullptr, &timeout); // The only reason I'm keeping select here is for the timeout, if the esp goes silent then there will be a 1 second delay. If it's not silent it runs full speed. 
+    int result = select(maxFd + 1, &copy, nullptr, nullptr, &timeout); // The only reason I'm keeping select here is for the timeout, if the esp goes silent then there will be a 1 second delay. If it's not silent it runs full speed.
 
     if (result == 0)
     {
@@ -227,7 +224,7 @@ void loop()
 void printFile()
 {
     ostringstream j;
-    j << std::setprecision(8); 
+    j << std::setprecision(8);
     j << "{";
     if (!packet.sendMpu.valid)
     {
@@ -394,7 +391,7 @@ void printDisplay()
         cout << "Valid: " << packet.sendComp.valid << "\n";
     }
 
-    if (packet.sendGps.time.hour == gpsTimeCheck.hour && packet.sendGps.time.minute == gpsTimeCheck.minute && packet.sendGps.time.sec == gpsTimeCheck.sec)
+    if (packet.sendGps.time.hour == 0 && packet.sendGps.time.minute == 0 && packet.sendGps.time.sec == 0)
     {
         cout << "!!!!GPS Reading Not Valid!!!!" << "\n";
         cout << "Lat: " << "--------------------" << " " << "--------------------" << "\n";
@@ -403,6 +400,17 @@ void printDisplay()
         cout << "Sat Count: " << "--------------------" << "\n";
         cout << "HDOP: " << "--------------------" << "\n";
         cout << "Altitude: " << "--------------------" << "\n";
+        cout << "Time: " << packet.sendGps.time.hour << ":" << packet.sendGps.time.minute << ":" << packet.sendGps.time.sec << "\n";
+    }
+    else if (gpsTimeCheck.hour == packet.sendGps.time.hour && gpsTimeCheck.minute == packet.sendGps.time.minute && gpsTimeCheck.sec == packet.sendGps.time.sec)
+    {
+        cout << "!!!!Last Know GPS Reading!!!!" << "\n";
+        cout << "Lat: " << packet.sendGps.lat << " " << packet.sendGps.latDir << "\n";
+        cout << "Lon: " << packet.sendGps.lon << " " << packet.sendGps.lonDir << "\n";
+        cout << "Fix Quality: " << packet.sendGps.fixQual << "\n";
+        cout << "Sat Count: " << packet.sendGps.satCount << "\n";
+        cout << "HDOP: " << packet.sendGps.hdop << "\n";
+        cout << "Altitude: " << packet.sendGps.altitude << "\n";
         cout << "Time: " << packet.sendGps.time.hour << ":" << packet.sendGps.time.minute << ":" << packet.sendGps.time.sec << "\n";
     }
     else
