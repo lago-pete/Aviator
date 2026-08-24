@@ -16,13 +16,13 @@
 using namespace std;
 
 typedef websocketpp::server<websocketpp::config::asio> server_t;
+
 bool setup();
 void loop();
 void printDisplay();
 void printFile();
 
 int udp_fd;
-
 struct sockaddr_in addr;
 char buffer[100];
 struct sockaddr_in returnAddr;
@@ -38,7 +38,6 @@ struct __attribute__((packed)) MpuData
     int16_t gyroX = 0, gyroY = 0, gyroZ = 0;
     bool valid = false;
 } __attribute__((packed));
-
 struct __attribute__((packed)) BmeData
 {
     float temperature = 0;
@@ -47,7 +46,6 @@ struct __attribute__((packed)) BmeData
     float gasResistance = 0; 
     bool valid = false;
 } __attribute__((packed));
-
 struct __attribute__((packed)) CompassData
 {
     float headingDegrees = 0;
@@ -96,23 +94,26 @@ int hour = localTime->tm_hour;
 int minute = localTime->tm_min;
 int second = localTime->tm_sec;
 ofstream myFile("FlightLogs/Log_" + to_string(year) + "-" + to_string(month) + "-" + to_string(day) + "-" + to_string(hour) + ":" + to_string(minute) + ":" + to_string(second) + ".jsonl");
-fd_set set;
+fd_set udpSet;
+set<websocketpp::connection_hdl, owner_less<websocketpp::connection_hdl>> clients; // ownerless is a wrapped for the hdl allowing the set to now organize it. We need this because the hdl is a weak pointer and the set is unable to compare them. It is considered a rule in the set param
 
 void on_open(websocketpp::connection_hdl hdl)
 {
+    clients.insert(hdl);
     cout << "Client connected" << "\n";
+    cout<< "Total Clients: " << clients.size() << "\n";
 }
-
 void on_close(websocketpp::connection_hdl hdl)
 {
+    clients.erase(hdl)
     cout << "Client disconnected" << "\n";
-}
+    cout<< "Total Clients: " << clients.size() << "\n";
 
+}
 void on_message(websocketpp::connection_hdl hdl, server_t::message_ptr msg)
 {
     cout << "Message received" << "\n";
 }
-
 int main()
 {
     int count = 1;
@@ -137,21 +138,18 @@ int main()
         loop();
     }
 }
-
 bool setup()
 {
+
+    ////UDP SETUP
     udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
     
-
-
     if (udp_fd == -1)
     {
         cout << "Error Getting FD" << strerror(errno) << "\n";
         return false;
     }
-
-    fcntl(udp_fd, F_SETFL, O_NONBLOCK);
-
+    fcntl(udp_fd, F_SETFL, O_NONBLOCK); // This is a call to make the certain fd non blocking. We do this because if we call recvfrom() and there is no data yet it will pause and wait for that data. However since we have multiple things going on we want to make sure that it will return rather then waiting so others can run. 
     addr.sin_family = AF_INET;
     addr.sin_port = htons(3434);
     addr.sin_addr.s_addr = INADDR_ANY;
@@ -162,30 +160,32 @@ bool setup()
         close(udp_fd);
         return false;
     }
-    FD_SET(udp_fd, &set);
+    FD_SET(udp_fd, &udpSet);
+    /////
 
+
+
+    ///Websocket Setup
     ws_server.init_asio();
-
     ws_server.set_open_handler(on_open);
     ws_server.set_close_handler(on_close);
     ws_server.set_message_handler(on_message);
-
     ws_server.listen(8080);
     ws_server.start_accept();
 
+
     return true;
 }
-
 void loop()
 {
     addLen = sizeof(returnAddr);
-    fd_set copy = set;
+    fd_set copy = udpSet;
     timeout.tv_sec = 1;
     timeout.tv_usec = 0;
 
     int maxFd = udp_fd;
 
-    int result = select(maxFd + 1, &copy, nullptr, nullptr, &timeout);
+    int result = select(maxFd + 1, &copy, nullptr, nullptr, &timeout); // The only reason I'm keeping select here is for the timeout, if the esp goes silent then there will be a 1 second delay. If it's not silent it runs full speed. 
 
     if (result == 0)
     {
@@ -224,11 +224,10 @@ void loop()
 
     ws_server.poll_one();
 }
-
 void printFile()
 {
     ostringstream j;
-    j << std::setprecision(8); // ok apparently this is something called sticky and it applied to the rest of the calls, so when I was palcing it over and over it wasnt liking it.
+    j << std::setprecision(8); 
     j << "{";
     if (!packet.sendMpu.valid)
     {
