@@ -493,7 +493,8 @@ void sendToClients()
     bool gpsValid = !(gpsHour == gpsTimeCheck.hour && gpsMinute == gpsTimeCheck.minute && gpsSec == gpsTimeCheck.sec);
     if (!gpsValid)
     {
-        j << "\"gps\":{"
+        j << "\"Result\": This is in Inaccurate Result{"
+          << "\"gps\":{"
           << "\"valid\":false,"
           << "\"time\":{"
           << "\"hour\":" << gpsHour << ","
