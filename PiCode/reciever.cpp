@@ -431,7 +431,6 @@ void printDisplay()
 
     cout << "\n";
 }
-
 void sendToClients()
 {
     ostringstream j;
