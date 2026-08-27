@@ -7,9 +7,22 @@ int port = 3434;
 WiFiUDP udp;
 
 // // Offset Graph
-// //  mpuData(15Bytes), BMEdata(17bytes), compData(11bytes), GPSReading(46bytes):
-// //  Total Telemetry Packet size = 89bytes
-// //  [MPU 0-14] [BME 15-31] [COMP 32-42] [GPS 43-88]
+// //  mpuData(15Bytes), BMEdata(17bytes), compData(11bytes), GPSReading(50bytes):
+// //  Total Telemetry Packet size = 93bytes
+// //  [MPU 0-14] [BME 15-31] [COMP 32-42] [GPS 43-92]
+// //  GPS Breakdown (offsets relative to GPS start @43) vv
+// //   lat         double  8   43-50
+// //   lon         double  8   51-58
+// //   latDir      char    1   59
+// //   lonDir      char    1   60
+// //   fixQual     int     4   61-64
+// //   satCount    int     4   65-68
+// //   hdop        float   4   69-72
+// //   altitude    float   4   73-76
+// //   speedKnots  float   4   77-80
+// //   time.hour   int     4   81-84
+// //   time.minute int     4   85-88
+// //   time.sec    float   4   89-92
 // //  Full Breakdown vv
 // //  /Type	Bytes
 // //   bool	1
