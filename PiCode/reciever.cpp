@@ -70,6 +70,7 @@ struct __attribute__((packed)) GPSReading
     int satCount;
     float hdop;
     float altitude;
+    float speedKnots;
     GPSTime time;
 } __attribute__((packed));
 struct __attribute__((packed)) TelemetryPacket
@@ -305,6 +306,7 @@ void printFile()
         int gpsSatCount = packet.sendGps.satCount;
         float gpsHdop = packet.sendGps.hdop;
         float gpsAltitude = packet.sendGps.altitude;
+        float gpsSpeedKnots = packet.sendGps.speedKnots;
 
         j << "\"gps\":{"
           << "\"valid\":true,"
@@ -316,6 +318,7 @@ void printFile()
           << "\"satCount\":" << gpsSatCount << ","
           << "\"hdop\":" << gpsHdop << ","
           << "\"altitude\":" << gpsAltitude << ","
+          << "\"speedKnots\":" << gpsSpeedKnots << ","
           << "\"time\":{"
           << "\"hour\":" << gpsHour << ","
           << "\"minute\":" << gpsMinute << ","
@@ -403,6 +406,7 @@ void printDisplay()
         cout << "Sat Count: " << "--------------------" << "\n";
         cout << "HDOP: " << "--------------------" << "\n";
         cout << "Altitude: " << "--------------------" << "\n";
+        cout << "Speed (kt): " << "--------------------" << "\n";
         cout << "Time: " << packet.sendGps.time.hour << ":" << packet.sendGps.time.minute << ":" << packet.sendGps.time.sec << "\n";
     }
     else if (gpsTimeCheck.hour == packet.sendGps.time.hour && gpsTimeCheck.minute == packet.sendGps.time.minute && gpsTimeCheck.sec == packet.sendGps.time.sec)
@@ -414,6 +418,7 @@ void printDisplay()
         cout << "Sat Count: " << packet.sendGps.satCount << "\n";
         cout << "HDOP: " << packet.sendGps.hdop << "\n";
         cout << "Altitude: " << packet.sendGps.altitude << "\n";
+        cout << "Speed (kt): " << packet.sendGps.speedKnots << "\n";
         cout << "Time: " << packet.sendGps.time.hour << ":" << packet.sendGps.time.minute << ":" << packet.sendGps.time.sec << "\n";
     }
     else
@@ -425,6 +430,7 @@ void printDisplay()
         cout << "Sat Count: " << packet.sendGps.satCount << "\n";
         cout << "HDOP: " << packet.sendGps.hdop << "\n";
         cout << "Altitude: " << packet.sendGps.altitude << "\n";
+        cout << "Speed (kt): " << packet.sendGps.speedKnots << "\n";
         cout << "Time: " << packet.sendGps.time.hour << ":" << packet.sendGps.time.minute << ":" << packet.sendGps.time.sec << "\n";
         gpsTimeCheck = packet.sendGps.time;
     }
@@ -512,6 +518,7 @@ void sendToClients()
         int gpsSatCount = packet.sendGps.satCount;
         float gpsHdop = packet.sendGps.hdop;
         float gpsAltitude = packet.sendGps.altitude;
+        float gpsSpeedKnots = packet.sendGps.speedKnots;
 
         j << "\"gps\":{"
           << "\"valid\":true,"
@@ -523,6 +530,7 @@ void sendToClients()
           << "\"satCount\":" << gpsSatCount << ","
           << "\"hdop\":" << gpsHdop << ","
           << "\"altitude\":" << gpsAltitude << ","
+          << "\"speedKnots\":" << gpsSpeedKnots << ","
           << "\"time\":{"
           << "\"hour\":" << gpsHour << ","
           << "\"minute\":" << gpsMinute << ","
