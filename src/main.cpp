@@ -71,6 +71,7 @@ struct __attribute__((packed)) GPSReading
   int satCount;
   float hdop;
   float altitude;
+  float speedKnots;
   GPSTime time;
 } __attribute__((packed));
 struct __attribute__((packed)) TelemetryPacket
@@ -490,6 +491,7 @@ void displayGPS(String s)
   Serial.printf("  Lat/Lon:  %.5f %c   %.5f %c\n", gpsReading.lat, gpsReading.latDir, gpsReading.lon, gpsReading.lonDir);
   Serial.printf("  Fix/Sats: %d / %d    HDOP: %.2f    Alt: %.1fm\n",
                 gpsReading.fixQual, gpsReading.satCount, gpsReading.hdop, gpsReading.altitude);
+  Serial.printf("  Speed:    %.1f kt\n", gpsReading.speedKnots);
 }
 
 String bufferGPS;
@@ -540,6 +542,26 @@ void readGPS(GPSData &data)
             data.finalString = sentence;
             data.valid = true;
           }
+        }
+      }
+      if (check == "$GNRMC")
+      {
+        // RMC field 7 is speed over ground in knots.
+        int fieldStart = index + 1;
+        for (int field = 1; field <= 7; field++)
+        {
+          int fieldEnd = sentence.indexOf(',', fieldStart);
+          if (field == 7)
+          {
+            if (fieldEnd == -1)
+              fieldEnd = sentence.indexOf('*', fieldStart);
+            if (fieldEnd != -1)
+              gpsReading.speedKnots = sentence.substring(fieldStart, fieldEnd).toFloat();
+            break;
+          }
+          if (fieldEnd == -1)
+            break;
+          fieldStart = fieldEnd + 1;
         }
       }
     }
@@ -678,13 +700,11 @@ void printDashboard(long now)
 
 void setup()
 {
-  
+
   Serial.begin(115200);
   Serial.setDebugOutput(true);
   WiFi.onEvent([](WiFiEvent_t event)
                { Serial.printf("WiFi Event: %d\n", event); });
-
-  
 
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(true);
@@ -712,9 +732,6 @@ void setup()
     delay(1000);
     Serial.println(WiFi.status());
   }
-
-  
-
 
   Serial.println("connected!");
   Serial.println(WiFi.localIP());
