@@ -86,7 +86,10 @@ BmeData bmeData;
 CompassData compassData;
 GPSReading gpsReading;
 TelemetryPacket packet;
-GPSTime gpsTimeCheck;
+GPSTime gpsTimeCheckD;
+GPSTime gpsTimeCheckF;
+GPSTime gpsTimeCheckC;
+
 
 time_t now = time(nullptr);
 struct tm *localTime = localtime(&now);
@@ -284,7 +287,7 @@ void printFile()
     int gpsHour = packet.sendGps.time.hour;
     int gpsMinute = packet.sendGps.time.minute;
     float gpsSec = packet.sendGps.time.sec;
-    bool gpsValid = !(gpsHour == gpsTimeCheck.hour && gpsMinute == gpsTimeCheck.minute && gpsSec == gpsTimeCheck.sec);
+    bool gpsValid = !(gpsHour == gpsTimeCheckF.hour && gpsMinute == gpsTimeCheckF.minute && gpsSec == gpsTimeCheckF.sec);
     if (!gpsValid)
     {
         j << "\"gps\":{"
@@ -325,7 +328,7 @@ void printFile()
           << "\"sec\":" << gpsSec
           << "}"
           << "}";
-        gpsTimeCheck = packet.sendGps.time;
+        gpsTimeCheckF = packet.sendGps.time;
     }
 
     j << "}";
@@ -409,7 +412,7 @@ void printDisplay()
         cout << "Speed (kt): " << "--------------------" << "\n";
         cout << "Time: " << packet.sendGps.time.hour << ":" << packet.sendGps.time.minute << ":" << packet.sendGps.time.sec << "\n";
     }
-    else if (gpsTimeCheck.hour == packet.sendGps.time.hour && gpsTimeCheck.minute == packet.sendGps.time.minute && gpsTimeCheck.sec == packet.sendGps.time.sec)
+    else if (gpsTimeCheckD.hour == packet.sendGps.time.hour && gpsTimeCheckD.minute == packet.sendGps.time.minute && gpsTimeCheckD.sec == packet.sendGps.time.sec)
     {
         cout << "!!!!Last Know GPS Reading!!!!" << "\n";
         cout << "Lat: " << packet.sendGps.lat << " " << packet.sendGps.latDir << "\n";
@@ -432,7 +435,7 @@ void printDisplay()
         cout << "Altitude: " << packet.sendGps.altitude << "\n";
         cout << "Speed (kt): " << packet.sendGps.speedKnots << "\n";
         cout << "Time: " << packet.sendGps.time.hour << ":" << packet.sendGps.time.minute << ":" << packet.sendGps.time.sec << "\n";
-        gpsTimeCheck = packet.sendGps.time;
+        gpsTimeCheckD = packet.sendGps.time;
     }
 
     cout << "\n";
@@ -496,7 +499,7 @@ void sendToClients()
     int gpsHour = packet.sendGps.time.hour;
     int gpsMinute = packet.sendGps.time.minute;
     float gpsSec = packet.sendGps.time.sec;
-    bool gpsValid = !(gpsHour == gpsTimeCheck.hour && gpsMinute == gpsTimeCheck.minute && gpsSec == gpsTimeCheck.sec);
+    bool gpsValid = !(gpsHour == gpsTimeCheckC.hour && gpsMinute == gpsTimeCheckC.minute && gpsSec == gpsTimeCheckC.sec);
     if (!gpsValid)
     {
         j << "\"gps\":{"
@@ -537,7 +540,7 @@ void sendToClients()
           << "\"sec\":" << gpsSec
           << "}"
           << "}";
-        gpsTimeCheck = packet.sendGps.time;
+        gpsTimeCheckC = packet.sendGps.time;
     }
 
     j << "}";
