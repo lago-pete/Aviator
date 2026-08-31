@@ -367,6 +367,8 @@ void printDisplay()
         cout << "Gyro Y: " << "--------------------" << "\n";
         cout << "Gyro Z: " << "--------------------" << "\n";
         cout << "Valid: " << "--------------------" << "\n";
+        cout << "Roll: " << "--------------------" << "\n";
+        cout << "Pitch: " << "--------------------" << "\n";
     }
     else
     {
@@ -379,6 +381,16 @@ void printDisplay()
         cout << "Gyro Y: " << packet.sendMpu.gyroY << "\n";
         cout << "Gyro Z: " << packet.sendMpu.gyroZ << "\n";
         cout << "Valid: " << packet.sendMpu.valid << "\n";
+        if (attitude_ready)
+        {
+            cout << "Roll: " << roll_prev << "\n";
+            cout << "Pitch: " << pitch_prev << "\n";
+        }
+        else
+        {
+            cout << "Roll: " << "-------- calibrating --------" << "\n";
+            cout << "Pitch: " << "-------- calibrating --------" << "\n";
+        }
     }
     if (!packet.sendBme.valid)
     {
