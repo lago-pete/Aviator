@@ -32,6 +32,12 @@ struct in_addr espIP;
 socklen_t addLen;
 timeval timeout;
 server_t ws_server;
+double sum_roll = 0, sum_pitch = 0;
+int calib_count = 0;
+const int CALIB_N = 10;  // adjust after testing
+double roll_prev = 0, pitch_prev = 0;
+long last_attitude_time = 0;
+bool attitude_ready = false;
 
 struct __attribute__((packed)) MpuData
 {
@@ -557,3 +563,35 @@ void sendToClients()
         }
     }
 }
+
+calculateAttitude(mpuData):
+    if (!mpuData.valid)
+    {
+        return;   // no new accel data this packet
+    } 
+
+    double roll_raw  = atan2(mpuData.accelY, mpuData.accelZ) * 180/PI
+    double pitch_raw = atan2(-mpuData.accelX, sqrt(accelY² + accelZ²)) * 180/PI
+
+    if (!attitude_ready)
+    {
+        sum_roll += roll_raw
+        sum_pitch += pitch_raw
+        calib_count++
+        if (calib_count >= CALIB_N)
+        {
+            roll_prev  = sum_roll / CALIB_N
+            pitch_prev = sum_pitch / CALIB_N
+            attitude_ready = true
+            last_attitude_time = now()
+        }
+        mpuData.roll = 0        // or omit — mpu.valid stays false either way
+        mpuData.pitch = 0
+        return;   // still calibrating, don't run filter yet
+    }
+    // filter goes here — next step, once you're ready for it
+    // for now, as a first working version, just do accel-only:
+    roll_prev  = roll_raw
+    pitch_prev = pitch_raw
+    mpuData.roll  = roll_prev
+    mpuData.pitch = pitch_prev
