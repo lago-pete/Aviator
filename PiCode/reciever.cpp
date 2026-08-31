@@ -12,6 +12,7 @@
 #include <vector>
 #include <algorithm>
 #include <set>
+#include <cmath>
 #include <websocketpp/config/asio_no_tls.hpp>
 #include <websocketpp/server.hpp>
 using namespace std;
@@ -23,6 +24,7 @@ void loop();
 void printDisplay();
 void printFile();
 void sendToClients();
+void calculateAttitude(struct MpuData &mpuData);
 
 int udp_fd;
 struct sockaddr_in addr;
@@ -199,8 +201,7 @@ void loop()
     {
         cout << "[IDLE]...." << "\n";
     }
-
-    if (result > 0 && FD_ISSET(udp_fd, &copy))
+    else if(result > 0 && FD_ISSET(udp_fd, &copy))
     {
         int readBuff = recvfrom(udp_fd, buffer, sizeof(buffer), 0, (struct sockaddr *)&returnAddr, &addLen);
         if (readBuff == -1)
@@ -218,6 +219,7 @@ void loop()
         else
         {
             memcpy(&packet, buffer, sizeof(packet));
+            calculateAttitude(packet.sendMpu);
             printDisplay();
             if (!myFile.is_open())
             {
@@ -253,8 +255,18 @@ void printFile()
           << "\"temp\":" << (int16_t)packet.sendMpu.temp << ","
           << "\"gyroX\":" << (int16_t)packet.sendMpu.gyroX << ","
           << "\"gyroY\":" << (int16_t)packet.sendMpu.gyroY << ","
-          << "\"gyroZ\":" << (int16_t)packet.sendMpu.gyroZ
-          << "}";
+          << "\"gyroZ\":" << (int16_t)packet.sendMpu.gyroZ;
+        if (attitude_ready)
+        {
+            j << ",\"attitudeReady\":true,"
+              << "\"roll\":" << roll_prev << ","
+              << "\"pitch\":" << pitch_prev;
+        }
+        else
+        {
+            j << ",\"attitudeReady\":false";
+        }
+        j << "}";
     }
     j << ",";
 
@@ -465,8 +477,18 @@ void sendToClients()
           << "\"temp\":" << (int16_t)packet.sendMpu.temp << ","
           << "\"gyroX\":" << (int16_t)packet.sendMpu.gyroX << ","
           << "\"gyroY\":" << (int16_t)packet.sendMpu.gyroY << ","
-          << "\"gyroZ\":" << (int16_t)packet.sendMpu.gyroZ
-          << "}";
+          << "\"gyroZ\":" << (int16_t)packet.sendMpu.gyroZ;
+        if (attitude_ready)
+        {
+            j << ",\"attitudeReady\":true,"
+              << "\"roll\":" << roll_prev << ","
+              << "\"pitch\":" << pitch_prev;
+        }
+        else
+        {
+            j << ",\"attitudeReady\":false";
+        }
+        j << "}";
     }
     j << ",";
 
@@ -563,35 +585,31 @@ void sendToClients()
         }
     }
 }
-
-calculateAttitude(mpuData):
+void calculateAttitude(MpuData &mpuData){
     if (!mpuData.valid)
     {
         return;   // no new accel data this packet
     } 
 
-    double roll_raw  = atan2(mpuData.accelY, mpuData.accelZ) * 180/PI
-    double pitch_raw = atan2(-mpuData.accelX, sqrt(accelY² + accelZ²)) * 180/PI
+    double roll_raw  = atan2(mpuData.accelY, mpuData.accelZ) * 180/M_PI;
+    double pitch_raw = atan2(-mpuData.accelX, sqrt((mpuData.accelY * mpuData.accelY) + (mpuData.accelZ * mpuData.accelZ))) * 180/M_PI;
 
     if (!attitude_ready)
     {
-        sum_roll += roll_raw
-        sum_pitch += pitch_raw
-        calib_count++
+        sum_roll += roll_raw;
+        sum_pitch += pitch_raw;
+        calib_count++;
         if (calib_count >= CALIB_N)
         {
-            roll_prev  = sum_roll / CALIB_N
-            pitch_prev = sum_pitch / CALIB_N
-            attitude_ready = true
-            last_attitude_time = now()
+            roll_prev  = sum_roll / CALIB_N;
+            pitch_prev = sum_pitch / CALIB_N;
+            attitude_ready = true;
+            last_attitude_time = time(nullptr);
         }
-        mpuData.roll = 0        // or omit — mpu.valid stays false either way
-        mpuData.pitch = 0
         return;   // still calibrating, don't run filter yet
     }
     // filter goes here — next step, once you're ready for it
     // for now, as a first working version, just do accel-only:
-    roll_prev  = roll_raw
-    pitch_prev = pitch_raw
-    mpuData.roll  = roll_prev
-    mpuData.pitch = pitch_prev
+    roll_prev  = roll_raw;
+    pitch_prev = pitch_raw;
+}
