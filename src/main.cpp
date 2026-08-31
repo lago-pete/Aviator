@@ -591,6 +591,53 @@ void readGPS(GPSData &data)
 }
 
 // ---------------------------------------------------------------------------
+// Checks for when each sensor is due to be read, and tracks the last time each was read.
+// ---------------------------------------------------------------------------
+
+bool imu_ist_due = false;
+bool bme_due = false;
+bool gps_due = false;
+long imu_last = 0;
+long bme_last = 0;
+long gps_last = 0;
+long lastPrint = 0;
+long lastGPS = 0;
+
+
+void checkSensorDue(long now)
+{
+  if(now - imu_last >= 10)
+  {
+    imu_last = now;
+    imu_ist_due = true;
+  }
+  else
+  {
+    imu_ist_due = false;
+  }
+  if(now - bme_last >= 70)
+  {
+    bme_last = now;
+    bme_due = true;
+  }
+  else
+  {
+    bme_due = false;
+  }
+  if(now - gps_last >= 1000)
+  {
+    gps_last = now;
+    gps_due = true;
+  }
+  else
+  {
+    gps_due = false;
+  }
+}
+
+
+
+// ---------------------------------------------------------------------------
 // Display helpers
 // ---------------------------------------------------------------------------
 
@@ -605,8 +652,8 @@ void printDivider(char c = '-')
   Serial.println();
 }
 
-long lastPrint = 0;
-long lastGPS = 0;
+
+
 
 // ---------------------------------------------------------------------------
 // Startup device check
@@ -766,6 +813,9 @@ void setup()
   readBmeCalibration();
 }
 
+
+
+
 void loop()
 {
   readMpu(mpuData);
@@ -774,7 +824,8 @@ void loop()
   readGPS(gpsData);
 
   long now = millis();
-  if (now - lastPrint > 500) // instead of Delay of (500) I going with this strat. This will allow the gps to continue cycling the buffer rather then having to wait for the delay to finish.
+  checkSensorDue(now);
+  if (imu_ist_due || bme_due || gps_due) 
   {
     lastPrint = now;
     printDashboard(now);
